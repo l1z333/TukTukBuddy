@@ -6,6 +6,7 @@ import android.os.Bundle;
 import android.view.View;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -26,10 +27,10 @@ import java.util.Locale;
 
 public class PostTripActivity extends AppCompatActivity {
 
-    private TextInputLayout tilPickup;
-    private TextInputEditText etPickup;
-    private TextInputLayout tilDestination;
-    private TextInputEditText etDestination;
+    private Spinner spinnerPickup;
+    private Spinner spinnerDestination;
+    private TextView tvPickupError;
+    private TextView tvDestinationError;
     private TextInputLayout tilDate;
     private TextInputEditText etDate;
     private TextInputLayout tilTime;
@@ -58,10 +59,10 @@ public class PostTripActivity extends AppCompatActivity {
         userRepository = new UserRepository();
         tripRepository = new TripRepository();
 
-        tilPickup = findViewById(R.id.tilPickup);
-        etPickup = findViewById(R.id.etPickup);
-        tilDestination = findViewById(R.id.tilDestination);
-        etDestination = findViewById(R.id.etDestination);
+        spinnerPickup = findViewById(R.id.spinnerPickup);
+        spinnerDestination = findViewById(R.id.spinnerDestination);
+        tvPickupError = findViewById(R.id.tvPickupError);
+        tvDestinationError = findViewById(R.id.tvDestinationError);
         tilDate = findViewById(R.id.tilDate);
         etDate = findViewById(R.id.etDate);
         tilTime = findViewById(R.id.tilTime);
@@ -117,21 +118,26 @@ public class PostTripActivity extends AppCompatActivity {
     }
 
     private void handlePostTripSubmit() {
-        String pickup = etPickup.getText() != null ? etPickup.getText().toString().trim() : "";
-        String destination = etDestination.getText() != null ? etDestination.getText().toString().trim() : "";
+        // Spinner: index 0 is the placeholder "Select location…"
+        int pickupIndex = spinnerPickup.getSelectedItemPosition();
+        int destIndex = spinnerDestination.getSelectedItemPosition();
+        String pickup = pickupIndex > 0 ? spinnerPickup.getSelectedItem().toString() : "";
+        String destination = destIndex > 0 ? spinnerDestination.getSelectedItem().toString() : "";
         String date = etDate.getText() != null ? etDate.getText().toString().trim() : "";
         String time = etTime.getText() != null ? etTime.getText().toString().trim() : "";
         String seatsStr = etSeats.getText() != null ? etSeats.getText().toString().trim() : "";
         String notes = etNotes.getText() != null ? etNotes.getText().toString().trim() : "";
 
-        tilPickup.setError(null);
-        tilDestination.setError(null);
+        // Clear previous errors
+        tvPickupError.setVisibility(View.GONE);
+        tvDestinationError.setVisibility(View.GONE);
         tilDate.setError(null);
         tilTime.setError(null);
         tilSeats.setError(null);
 
         boolean isPickupValid = !pickup.isEmpty();
         boolean isDestValid = !destination.isEmpty();
+        boolean isSameLocation = isPickupValid && isDestValid && pickup.equals(destination);
         boolean isDateValid = !date.isEmpty();
         boolean isTimeValid = !time.isEmpty();
 
@@ -143,13 +149,16 @@ public class PostTripActivity extends AppCompatActivity {
         boolean isSeatsValid = parsedSeats >= 1 && parsedSeats <= 10;
 
         if (!isPickupValid) {
-            tilPickup.setError(getString(R.string.error_pickup_required));
-            etPickup.requestFocus();
+            tvPickupError.setText(getString(R.string.error_pickup_spinner));
+            tvPickupError.setVisibility(View.VISIBLE);
         }
 
         if (!isDestValid) {
-            tilDestination.setError(getString(R.string.error_destination_required));
-            if (isPickupValid) etDestination.requestFocus();
+            tvDestinationError.setText(getString(R.string.error_destination_spinner));
+            tvDestinationError.setVisibility(View.VISIBLE);
+        } else if (isSameLocation) {
+            tvDestinationError.setText(getString(R.string.error_same_location));
+            tvDestinationError.setVisibility(View.VISIBLE);
         }
 
         if (!isDateValid) {
@@ -162,10 +171,9 @@ public class PostTripActivity extends AppCompatActivity {
 
         if (!isSeatsValid) {
             tilSeats.setError(getString(R.string.error_seats_invalid));
-            if (isPickupValid && isDestValid) etSeats.requestFocus();
         }
 
-        if (!isPickupValid || !isDestValid || !isDateValid || !isTimeValid || !isSeatsValid) {
+        if (!isPickupValid || !isDestValid || isSameLocation || !isDateValid || !isTimeValid || !isSeatsValid) {
             return;
         }
 
@@ -226,8 +234,8 @@ public class PostTripActivity extends AppCompatActivity {
 
     private void setFormInputsEnabled(boolean enabled) {
         btnSubmitTrip.setEnabled(enabled);
-        etPickup.setEnabled(enabled);
-        etDestination.setEnabled(enabled);
+        spinnerPickup.setEnabled(enabled);
+        spinnerDestination.setEnabled(enabled);
         etSeats.setEnabled(enabled);
         etNotes.setEnabled(enabled);
     }

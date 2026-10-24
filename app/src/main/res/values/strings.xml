@@ -90,4 +90,31 @@
     <string name="submitting_request">Submitting request…</string>
     <string name="processing_request">Processing request…</string>
     <string name="requester_label">Requested by: %1$s</string>
+
+    <!-- Campus Locations -->
+    <string-array name="campus_locations">
+        <item>Select location…</item>
+        <item>Main Gate</item>
+        <item>Hostel Block A</item>
+        <item>Hostel Block B</item>
+        <item>Hostel Block C</item>
+        <item>Academic Block</item>
+        <item>Library</item>
+        <item>Canteen</item>
+        <item>Sports Complex</item>
+        <item>Railway Station</item>
+        <item>Bus Stand</item>
+        <item>Metro Station</item>
+        <item>City Mall</item>
+        <item>Airport</item>
+    </string-array>
+
+    <string name="label_from">From</string>
+    <string name="label_to">To</string>
+    <string name="filter_all_locations">All locations</string>
+    <string name="error_pickup_spinner">Please select a pickup location</string>
+    <string name="error_destination_spinner">Please select a destination</string>
+    <string name="error_same_location">Pickup and destination cannot be the same</string>
+    <string name="btn_filter">Filter</string>
+    <string name="btn_clear_filter">Show All</string>
 </resources>

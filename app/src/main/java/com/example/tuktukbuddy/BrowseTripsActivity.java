@@ -2,8 +2,11 @@ package com.example.tuktukbuddy;
 
 import android.os.Bundle;
 import android.view.View;
+import android.widget.AdapterView;
+import android.widget.ArrayAdapter;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -22,6 +25,7 @@ import com.example.tuktukbuddy.util.UserPreferenceManager;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.firebase.auth.FirebaseUser;
 
+import java.util.ArrayList;
 import java.util.List;
 
 public class BrowseTripsActivity extends AppCompatActivity {
@@ -31,6 +35,11 @@ public class BrowseTripsActivity extends AppCompatActivity {
     private LinearLayout layoutEmpty;
     private LinearLayout layoutError;
     private TextView tvErrorMessage;
+
+    private Spinner spinnerFilterFrom;
+    private Spinner spinnerFilterTo;
+
+    private List<Trip> allTrips = new ArrayList<>();
 
     private TripAdapter tripAdapter;
     private TripRepository tripRepository;
@@ -57,6 +66,37 @@ public class BrowseTripsActivity extends AppCompatActivity {
         layoutError = findViewById(R.id.layoutError);
         tvErrorMessage = findViewById(R.id.tvErrorMessage);
 
+        spinnerFilterFrom = findViewById(R.id.spinnerFilterFrom);
+        spinnerFilterTo = findViewById(R.id.spinnerFilterTo);
+
+        // Build filter adapter: "All locations" + campus list
+        String[] campusLocations = getResources().getStringArray(R.array.campus_locations);
+        // campusLocations[0] is "Select location…" — reuse all items but rename index 0
+        String[] filterItems = new String[campusLocations.length];
+        filterItems[0] = getString(R.string.filter_all_locations);
+        System.arraycopy(campusLocations, 1, filterItems, 1, campusLocations.length - 1);
+
+        ArrayAdapter<String> filterAdapter = new ArrayAdapter<>(this,
+                android.R.layout.simple_spinner_item, filterItems);
+        filterAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        spinnerFilterFrom.setAdapter(filterAdapter);
+        spinnerFilterTo.setAdapter(filterAdapter);
+
+        AdapterView.OnItemSelectedListener filterListener = new AdapterView.OnItemSelectedListener() {
+            @Override public void onItemSelected(AdapterView<?> parent, View view, int position, long id) {
+                applyFilter();
+            }
+            @Override public void onNothingSelected(AdapterView<?> parent) {}
+        };
+        spinnerFilterFrom.setOnItemSelectedListener(filterListener);
+        spinnerFilterTo.setOnItemSelectedListener(filterListener);
+
+        Button btnClearFilter = findViewById(R.id.btnClearFilter);
+        btnClearFilter.setOnClickListener(v -> {
+            spinnerFilterFrom.setSelection(0);
+            spinnerFilterTo.setSelection(0);
+        });
+
         Button btnRetry = findViewById(R.id.btnRetry);
         Button btnRefreshEmpty = findViewById(R.id.btnRefreshEmpty);
 
@@ -82,13 +122,8 @@ public class BrowseTripsActivity extends AppCompatActivity {
             @Override
             public void onSuccess(List<Trip> trips) {
                 if (isFinishing() || isDestroyed()) return;
-
-                if (trips == null || trips.isEmpty()) {
-                    showEmptyState();
-                } else {
-                    tripAdapter.setTrips(trips);
-                    showContentState();
-                }
+                allTrips = trips != null ? trips : new ArrayList<>();
+                applyFilter();
             }
 
             @Override
@@ -97,6 +132,27 @@ public class BrowseTripsActivity extends AppCompatActivity {
                 showErrorState(e != null ? e.getMessage() : "Unknown error occurred.");
             }
         });
+    }
+
+    private void applyFilter() {
+        int fromIndex = spinnerFilterFrom.getSelectedItemPosition();
+        int toIndex = spinnerFilterTo.getSelectedItemPosition();
+        String fromFilter = fromIndex > 0 ? spinnerFilterFrom.getSelectedItem().toString() : null;
+        String toFilter = toIndex > 0 ? spinnerFilterTo.getSelectedItem().toString() : null;
+
+        List<Trip> filtered = new ArrayList<>();
+        for (Trip trip : allTrips) {
+            boolean matchFrom = fromFilter == null || fromFilter.equalsIgnoreCase(trip.getPickup());
+            boolean matchTo = toFilter == null || toFilter.equalsIgnoreCase(trip.getDestination());
+            if (matchFrom && matchTo) filtered.add(trip);
+        }
+
+        if (filtered.isEmpty()) {
+            showEmptyState();
+        } else {
+            tripAdapter.setTrips(filtered);
+            showContentState();
+        }
     }
 
     private void confirmAndSendJoinRequest(Trip trip) {

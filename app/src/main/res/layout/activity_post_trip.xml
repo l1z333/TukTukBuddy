@@ -50,40 +50,60 @@
                     android:orientation="vertical"
                     android:padding="20dp">
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/tilPickup"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                    <TextView
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:hint="@string/label_pickup"
-                        app:errorEnabled="true">
+                        android:text="@string/label_from"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp"
+                        android:layout_marginBottom="4dp" />
 
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etPickup"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/hint_pickup"
-                            android:inputType="textCapWords"
-                            android:maxLines="1" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                    <Spinner
+                        android:id="@+id/spinnerPickup"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:background="@drawable/spinner_background"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:entries="@array/campus_locations" />
 
-                    <com.google.android.material.textfield.TextInputLayout
-                        android:id="@+id/tilDestination"
-                        style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                    <TextView
+                        android:id="@+id/tvPickupError"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:hint="@string/label_destination"
-                        app:errorEnabled="true">
+                        android:textColor="#B00020"
+                        android:textSize="12sp"
+                        android:visibility="gone"
+                        android:layout_marginBottom="4dp" />
 
-                        <com.google.android.material.textfield.TextInputEditText
-                            android:id="@+id/etDestination"
-                            android:layout_width="match_parent"
-                            android:layout_height="wrap_content"
-                            android:hint="@string/hint_destination"
-                            android:inputType="textCapWords"
-                            android:maxLines="1" />
-                    </com.google.android.material.textfield.TextInputLayout>
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/label_to"
+                        android:textColor="@color/on_surface_variant"
+                        android:textSize="12sp"
+                        android:layout_marginTop="12dp"
+                        android:layout_marginBottom="4dp" />
+
+                    <Spinner
+                        android:id="@+id/spinnerDestination"
+                        android:layout_width="match_parent"
+                        android:layout_height="52dp"
+                        android:background="@drawable/spinner_background"
+                        android:paddingStart="12dp"
+                        android:paddingEnd="12dp"
+                        android:entries="@array/campus_locations" />
+
+                    <TextView
+                        android:id="@+id/tvDestinationError"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textColor="#B00020"
+                        android:textSize="12sp"
+                        android:visibility="gone"
+                        android:layout_marginBottom="4dp" />
+
+
 
                     <LinearLayout
                         android:layout_width="match_parent"
