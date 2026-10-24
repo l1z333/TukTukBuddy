@@ -1,3 +1,93 @@
 <resources>
     <string name="app_name">TukTukBuddy</string>
+    <string name="tagline">Campus Auto-Sharing</string>
+
+    <!-- Onboarding & Profile -->
+    <string name="onboarding_title">Welcome to TukTukBuddy!</string>
+    <string name="onboarding_subtitle">Share rides, save costs, and move around campus hassle-free with fellow students.</string>
+    <string name="label_name">Full Name</string>
+    <string name="hint_name">e.g., Alex Morgan</string>
+    <string name="label_roll_no">Roll Number / Student ID</string>
+    <string name="hint_roll_no">e.g., 21CS045</string>
+    <string name="btn_continue">Continue</string>
+    <string name="error_name_required">Please enter your name (at least 2 characters)</string>
+    <string name="error_roll_no_required">Please enter a valid roll number</string>
+    <string name="home_welcome_title">Welcome, %1$s!</string>
+    <string name="home_roll_no">Roll No: %1$s</string>
+    <string name="home_rating">Rating: ★ %1$.1f / 5.0</string>
+    <string name="home_subtitle">Campus Auto-Sharing Dashboard</string>
+    <string name="btn_reset_profile">Reset Profile / Sign Out</string>
+    <string name="loading_profile">Checking profile…</string>
+    <string name="saving_profile">Saving your profile…</string>
+    <string name="status_ready">Ready for Ride Sharing</string>
+
+    <!-- Home Actions -->
+    <string name="btn_post_trip">🛺 Post a New Trip</string>
+    <string name="btn_browse_trips">🔍 Browse Open Trips</string>
+    <string name="btn_my_requests">📋 My Requests</string>
+    <string name="btn_manage_requests">✉️ Manage Requests</string>
+    <string name="home_actions_title">Quick Actions</string>
+
+    <!-- Post Trip Screen -->
+    <string name="title_post_trip">Post a Trip</string>
+    <string name="label_pickup">Pickup Location</string>
+    <string name="hint_pickup">e.g., Hostel Block B / Library</string>
+    <string name="label_destination">Destination</string>
+    <string name="hint_destination">e.g., Main Gate / Metro Station</string>
+    <string name="label_date">Travel Date</string>
+    <string name="hint_date">YYYY-MM-DD</string>
+    <string name="label_time">Travel Time</string>
+    <string name="hint_time">HH:MM AM/PM</string>
+    <string name="label_seats">Available Seats</string>
+    <string name="hint_seats">Number of open seats (1-10)</string>
+    <string name="label_notes">Optional Notes</string>
+    <string name="hint_notes">e.g., Splitting auto fare equally, leaving sharp at 5 PM</string>
+    <string name="btn_submit_trip">Publish Trip</string>
+    <string name="posting_trip">Publishing your trip…</string>
+
+    <string name="error_pickup_required">Please specify pickup location</string>
+    <string name="error_destination_required">Please specify destination</string>
+    <string name="error_date_required">Please select or enter travel date</string>
+    <string name="error_time_required">Please select or enter travel time</string>
+    <string name="error_seats_invalid">Please enter available seats between 1 and 10</string>
+
+    <!-- Browse Trips Screen -->
+    <string name="title_browse_trips">Browse Trips</string>
+    <string name="loading_trips">Fetching available trips…</string>
+    <string name="empty_trips_title">No Open Trips Available</string>
+    <string name="empty_trips_subtitle">There are currently no open trips posted by other students. Check back later or post your own trip!</string>
+    <string name="error_trips_title">Failed to load trips</string>
+    <string name="btn_retry">Retry</string>
+    <string name="trip_route_format">%1$s  ➔  %2$s</string>
+    <string name="trip_date_time_format">📅 %1$s   ⏰ %2$s</string>
+    <string name="trip_seats_format">🛺 %1$d seats available</string>
+    <string name="trip_creator_format">Posted by %1$s</string>
+    <string name="trip_status_open">OPEN</string>
+    <string name="btn_request_join">Request to Join</string>
+
+    <!-- Join Request & Management -->
+    <string name="title_my_requests">My Requests</string>
+    <string name="loading_my_requests">Fetching your ride requests…</string>
+    <string name="empty_my_requests_title">No Requests Sent</string>
+    <string name="empty_my_requests_subtitle">You have not requested to join any trips yet. Browse open trips to request a seat!</string>
+    <string name="error_requests_title">Failed to load requests</string>
+
+    <string name="title_manage_requests">Manage Requests</string>
+    <string name="loading_manage_requests">Fetching requests for your trips…</string>
+    <string name="empty_manage_requests_title">No Requests Received</string>
+    <string name="empty_manage_requests_subtitle">No students have requested to join your trips yet.</string>
+
+    <string name="btn_accept">Accept</string>
+    <string name="btn_reject">Reject</string>
+    <string name="status_pending">PENDING</string>
+    <string name="status_accepted">ACCEPTED</string>
+    <string name="status_rejected">REJECTED</string>
+
+    <string name="dialog_confirm_request_title">Request Seat</string>
+    <string name="dialog_confirm_request_message">Send a request to join this trip (%1$s)?</string>
+    <string name="dialog_confirm_accept_message">Accept ride request from %1$s?</string>
+    <string name="dialog_confirm_reject_message">Reject ride request from %1$s?</string>
+    <string name="submitting_request">Submitting request…</string>
+    <string name="processing_request">Processing request…</string>
+    <string name="requester_label">Requested by: %1$s</string>
 </resources>

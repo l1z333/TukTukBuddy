@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<com.google.android.material.card.MaterialCardView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginHorizontal="16dp"
+    android:layout_marginVertical="8dp"
+    app:cardCornerRadius="14dp"
+    app:cardElevation="2dp"
+    app:strokeColor="@color/surface_variant"
+    app:strokeWidth="1dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <!-- Top Row: Route Header & Status Badge -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/tvTripRoute"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:textColor="@color/on_surface"
+                android:textSize="17sp"
+                android:textStyle="bold"
+                tools:text="Hostel Block B ➔ Main Gate" />
+
+            <TextView
+                android:id="@+id/tvTripStatus"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:background="@color/primary_container"
+                android:paddingHorizontal="8dp"
+                android:paddingVertical="3dp"
+                android:text="@string/trip_status_open"
+                android:textColor="@color/on_primary_container"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Date & Time Row -->
+        <TextView
+            android:id="@+id/tvTripDateTime"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textColor="@color/on_surface_variant"
+            android:textSize="14sp"
+            tools:text="📅 2025-05-20   ⏰ 05:30 PM" />
+
+        <!-- Available Seats Row -->
+        <TextView
+            android:id="@+id/tvTripSeats"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:textColor="@color/primary"
+            android:textSize="14sp"
+            android:textStyle="bold"
+            tools:text="🛺 3 seats available" />
+
+        <!-- Creator Name Row -->
+        <TextView
+            android:id="@+id/tvTripCreator"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:textColor="@color/secondary"
+            android:textSize="13sp"
+            android:textStyle="italic"
+            tools:text="Posted by Alex Morgan" />
+
+        <!-- Optional Notes -->
+        <TextView
+            android:id="@+id/tvTripNotes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="#10006A60"
+            android:padding="8dp"
+            android:textColor="@color/on_surface"
+            android:textSize="13sp"
+            android:visibility="gone"
+            tools:text="Notes: Leaving on time from library parking."
+            tools:visibility="visible" />
+
+        <!-- Request Join Action Button -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnRequestJoin"
+            android:layout_width="match_parent"
+            android:layout_height="48dp"
+            android:layout_marginTop="12dp"
+            android:text="@string/btn_request_join"
+            android:textSize="14sp"
+            app:cornerRadius="10dp" />
+
+    </LinearLayout>
+</com.google.android.material.card.MaterialCardView>
