@@ -78,6 +78,20 @@ service cloud.firestore {
                    || resource.data.lifecycleStatus == "IN_PROGRESS");
       }
 
+      function isValidTripCancellation() {
+        return isAuthenticated()
+               && resource.data.creatorUid == request.auth.uid
+               && (resource.data.status == "OPEN" || resource.data.status == "CLOSED")
+               && resource.data.departureAt is timestamp
+               && request.time < resource.data.departureAt
+               && (!resource.data.keys().hasAny(['lifecycleStatus'])
+                   || resource.data.lifecycleStatus == "SCHEDULED")
+               && request.resource.data.status == "CLOSED"
+               && request.resource.data.lifecycleStatus == "CANCELLED"
+               && request.resource.data.diff(resource.data).affectedKeys()
+                    .hasOnly(['status', 'lifecycleStatus']);
+      }
+
       function isValidCancellationSeatRestore(requestId) {
         let requestPath = /databases/$(database)/documents/rideRequests/$(requestId);
         let requestBefore = get(requestPath).data;
@@ -123,12 +137,12 @@ service cloud.firestore {
                     )
                     || (request.resource.data.keys().hasAny(['lastCancelledRequestId'])
                         && isValidCancellationSeatRestore(request.resource.data.lastCancelledRequestId))
+                    || isValidTripCancellation()
                     || isValidTripInProgress()
                     || isValidTripCompletion();
 
-      // Whole-trip cancellation is performed by the authenticated callable
-      // cancelTrip function with the Admin SDK, which bypasses these rules.
-      // No client update branch grants lifecycleStatus=CANCELLED.
+      // Whole-trip cancellation changes only this trip document. Requesters
+      // derive the cancelled history state from this lifecycle field.
       // Explicitly deny trip deletion
       allow delete: if false;
     }
@@ -163,6 +177,8 @@ service cloud.firestore {
                && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
                && tripBefore.tripId == resource.data.tripId
                && tripBefore.creatorUid == resource.data.creatorUid
+               && (!tripBefore.keys().hasAny(['lifecycleStatus'])
+                   || tripBefore.lifecycleStatus == "SCHEDULED")
                && isBeforeCancellationCutoff(tripBefore)
                && notificationAfter.notificationId == requestId
                && notificationAfter.type == "REQUEST_CANCELLED"

@@ -7,7 +7,7 @@ const { cancelTripCore, TripCancellationError } = require('./src/tripCancellatio
 
 initializeApp();
 
-exports.cancelTrip = onCall(async (request) => {
+exports.cancelTrip = onCall({ region: 'us-central1' }, async (request) => {
   try {
     return await cancelTripCore({
       firestore: getFirestore(),

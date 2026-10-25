@@ -4,7 +4,10 @@ import android.util.Log;
 
 import com.example.tuktukbuddy.model.RideRequest;
 import com.example.tuktukbuddy.model.Trip;
+import com.example.tuktukbuddy.util.TripLifecycleUtils;
 import com.example.tuktukbuddy.util.TripTimeUtils;
+import com.google.android.gms.tasks.Task;
+import com.google.android.gms.tasks.Tasks;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentReference;
@@ -16,6 +19,7 @@ import com.google.firebase.firestore.QueryDocumentSnapshot;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -223,16 +227,58 @@ public class RideRequestRepository {
                         requestList.add(request);
                     }
 
-                    requestList.sort((r1, r2) ->
-                            Long.compare(r2.getCreatedAt(), r1.getCreatedAt()));
+                    Map<String, Task<DocumentSnapshot>> pendingTripReads = new LinkedHashMap<>();
+                    for (RideRequest request : requestList) {
+                        if ("PENDING".equalsIgnoreCase(request.getStatus())
+                                && request.getTripId() != null
+                                && !request.getTripId().trim().isEmpty()) {
+                            pendingTripReads.computeIfAbsent(request.getTripId(), tripId ->
+                                    firestore.collection("trips").document(tripId).get());
+                        }
+                    }
 
-                    Log.d("RideRequestRepo", "fetchRequestsForTripCreator returned " + requestList.size() + " requests.");
-                    callback.onSuccess(requestList);
+                    if (pendingTripReads.isEmpty()) {
+                        deliverManageableRequests(requestList, new LinkedHashMap<>(), callback);
+                        return;
+                    }
+
+                    List<String> pendingTripIds = new ArrayList<>(pendingTripReads.keySet());
+                    Tasks.whenAllSuccess(new ArrayList<>(pendingTripReads.values()))
+                            .addOnSuccessListener(results -> {
+                                Map<String, Trip> pendingTrips = new LinkedHashMap<>();
+                                for (int index = 0; index < results.size(); index++) {
+                                    DocumentSnapshot tripSnapshot = (DocumentSnapshot) results.get(index);
+                                    if (tripSnapshot.exists()) {
+                                        Trip trip = tripSnapshot.toObject(Trip.class);
+                                        if (trip != null) pendingTrips.put(pendingTripIds.get(index), trip);
+                                    }
+                                }
+                                deliverManageableRequests(requestList, pendingTrips, callback);
+                            })
+                            .addOnFailureListener(callback::onFailure);
                 })
                 .addOnFailureListener(e -> {
                     Log.e("RideRequestRepo", "fetchRequestsForTripCreator failed", e);
                     callback.onFailure(e);
                 });
+    }
+
+    private void deliverManageableRequests(List<RideRequest> requests,
+                                           Map<String, Trip> tripsById,
+                                           RequestsLoadedCallback callback) {
+        List<RideRequest> visibleRequests = new ArrayList<>();
+        for (RideRequest request : requests) {
+            if ("PENDING".equalsIgnoreCase(request.getStatus())
+                    && !TripLifecycleUtils.shouldOfferManageActions(
+                    request, tripsById.get(request.getTripId()))) {
+                continue;
+            }
+            visibleRequests.add(request);
+        }
+        visibleRequests.sort((r1, r2) -> Long.compare(r2.getCreatedAt(), r1.getCreatedAt()));
+        Log.d("RideRequestRepo", "fetchRequestsForTripCreator returned "
+                + visibleRequests.size() + " manageable/history requests.");
+        callback.onSuccess(visibleRequests);
     }
 
     public void acceptRideRequest(
@@ -431,7 +477,7 @@ public class RideRequestRepository {
             RideRequest request,
             ActionCallback callback
     ) {
-        if (request == null || request.getRequestId() == null || request.getTripId() == null) {
+        if (request == null || request.getRequestId() == null || request.getRequestId().trim().isEmpty()) {
             callback.onFailure(new Exception("Invalid request details."));
             return;
         }
@@ -442,18 +488,18 @@ public class RideRequestRepository {
             return;
         }
 
-        DocumentReference tripRef = firestore.collection("trips").document(request.getTripId());
         DocumentReference requestRef = firestore.collection("rideRequests").document(request.getRequestId());
         DocumentReference notificationRef = firestore.collection("tripNotifications")
                 .document(request.getRequestId());
 
         firestore.runTransaction(transaction -> {
-            DocumentSnapshot tripSnapshot = transaction.get(tripRef);
             DocumentSnapshot requestSnapshot = transaction.get(requestRef);
 
-            if (!tripSnapshot.exists() || !requestSnapshot.exists()) {
+            if (!requestSnapshot.exists()) {
+                Log.e("RideRequestRepo", "Requester cancellation target missing"
+                        + " type=request requestId=" + requestRef.getId());
                 throw new FirebaseFirestoreException(
-                        "The trip or ride request no longer exists.",
+                        "The ride request no longer exists.",
                         FirebaseFirestoreException.Code.NOT_FOUND
                 );
             }
@@ -463,8 +509,37 @@ public class RideRequestRepository {
             String storedTripId = requestSnapshot.getString("tripId");
             String storedRequestId = requestSnapshot.getString("requestId");
             String requestStatus = requestSnapshot.getString("status");
+
+            // The request document is authoritative for its trip association. Do not
+            // construct a trip path from a possibly stale UI model.
+            if (storedTripId == null || storedTripId.trim().isEmpty()) {
+                throw new FirebaseFirestoreException(
+                        "The ride request does not contain a valid trip ID.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                );
+            }
+            DocumentReference tripRef = firestore.collection("trips").document(storedTripId);
+            DocumentSnapshot tripSnapshot = transaction.get(tripRef);
+            if (!tripSnapshot.exists()) {
+                Log.e("RideRequestRepo", "Requester cancellation target missing"
+                        + " type=trip requestId=" + requestRef.getId()
+                        + " tripId=" + storedTripId);
+                throw new FirebaseFirestoreException(
+                        "The trip linked to this ride request no longer exists.",
+                        FirebaseFirestoreException.Code.NOT_FOUND
+                );
+            }
+
             String tripStatus = tripSnapshot.getString("status");
             String creatorUid = tripSnapshot.getString("creatorUid");
+
+            if (TripLifecycleUtils.CANCELLED.equalsIgnoreCase(
+                    tripSnapshot.getString("lifecycleStatus"))) {
+                throw new FirebaseFirestoreException(
+                        "This trip has been cancelled, so its requests cannot be changed.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                );
+            }
 
             if (!currentUid.equals(requesterUid)) {
                 throw new FirebaseFirestoreException(
@@ -473,11 +548,10 @@ public class RideRequestRepository {
                 );
             }
             if (creatorUid == null
-                    || !request.getRequestId().equals(storedRequestId)
-                    || !request.getTripId().equals(storedTripId)
+                    || !requestRef.getId().equals(storedRequestId)
                     || !creatorUid.equals(requestSnapshot.getString("creatorUid"))) {
                 throw new FirebaseFirestoreException(
-                        "The request does not match the selected trip.",
+                        "The ride request is not linked to a valid trip.",
                         FirebaseFirestoreException.Code.FAILED_PRECONDITION
                 );
             }
@@ -513,8 +587,8 @@ public class RideRequestRepository {
             Map<String, Object> notification = new HashMap<>();
             notification.put("notificationId", notificationRef.getId());
             notification.put("type", "REQUEST_CANCELLED");
-            notification.put("tripId", request.getTripId());
-            notification.put("requestId", request.getRequestId());
+            notification.put("tripId", storedTripId);
+            notification.put("requestId", requestRef.getId());
             notification.put("senderUid", currentUid);
             notification.put("senderName", requesterName != null ? requesterName : "A passenger");
             notification.put("recipientUid", creatorUid);
@@ -526,6 +600,18 @@ public class RideRequestRepository {
             transaction.set(notificationRef, notification);
             return null;
         }).addOnSuccessListener(unused -> callback.onSuccess())
-                .addOnFailureListener(callback::onFailure);
+                .addOnFailureListener(error -> {
+                    String code = error instanceof FirebaseFirestoreException
+                            ? ((FirebaseFirestoreException) error).getCode().name()
+                            : error.getClass().getSimpleName();
+                    Log.e("RideRequestRepo", "Requester cancellation transaction failed"
+                            + " operation=cancelAcceptedRequest"
+                            + " exceptionClass=" + error.getClass().getSimpleName()
+                            + " code=" + code
+                            + " requestPath=/rideRequests/" + requestRef.getId()
+                            + " tripPath=derived-from-request-document"
+                            + " notificationPath=/tripNotifications/" + notificationRef.getId(), error);
+                    callback.onFailure(error);
+                });
     }
 }

@@ -1,5 +1,7 @@
 package com.example.tuktukbuddy.repository;
 
+import android.util.Log;
+
 import com.example.tuktukbuddy.model.Trip;
 import com.example.tuktukbuddy.util.TripLifecycleUtils;
 import com.google.firebase.auth.FirebaseAuth;
@@ -10,16 +12,15 @@ import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
-import com.google.firebase.functions.FirebaseFunctions;
 
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Collections;
 
 public class TripRepository {
+    private static final String TAG = "TripRepository";
     private final FirebaseFirestore firestore;
 
     public interface ActionCallback {
@@ -133,17 +134,66 @@ public class TripRepository {
                 .addOnFailureListener(callback::onFailure);
     }
 
-    /** Whole-trip cancellation is server-owned so every active request and notice changes atomically. */
+    /** Cancel only the shared trip document; requester history derives from its lifecycle. */
     public void cancelTrip(String tripId, ActionCallback callback) {
         FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
         if (currentUser == null || tripId == null || tripId.trim().isEmpty()) {
             callback.onFailure(new Exception("Authentication and a valid trip are required."));
             return;
         }
-        FirebaseFunctions.getInstance().getHttpsCallable("cancelTrip")
-                .call(Collections.singletonMap("tripId", tripId))
-                .addOnSuccessListener(unused -> callback.onSuccess())
-                .addOnFailureListener(callback::onFailure);
+        DocumentReference tripRef = firestore.collection("trips").document(tripId);
+        String currentUid = currentUser.getUid();
+        firestore.runTransaction(transaction -> {
+            DocumentSnapshot snapshot = transaction.get(tripRef);
+            if (!snapshot.exists()) {
+                throw new FirebaseFirestoreException("Trip does not exist.",
+                        FirebaseFirestoreException.Code.NOT_FOUND);
+            }
+            if (!currentUid.equals(snapshot.getString("creatorUid"))) {
+                throw new FirebaseFirestoreException("Only the trip creator can cancel this trip.",
+                        FirebaseFirestoreException.Code.PERMISSION_DENIED);
+            }
+
+            String lifecycle = snapshot.getString("lifecycleStatus");
+            if (TripLifecycleUtils.CANCELLED.equalsIgnoreCase(lifecycle)) {
+                return null; // Idempotent retry after an earlier successful cancellation.
+            }
+            if (TripLifecycleUtils.COMPLETED.equalsIgnoreCase(lifecycle)
+                    || (lifecycle != null
+                    && !TripLifecycleUtils.SCHEDULED.equalsIgnoreCase(lifecycle))) {
+                throw new FirebaseFirestoreException("Only a scheduled trip can be cancelled.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION);
+            }
+
+            Date departureAt = snapshot.getDate("departureAt");
+            if (departureAt == null || System.currentTimeMillis() >= departureAt.getTime()) {
+                throw new FirebaseFirestoreException(
+                        "This trip has departed or has no verified departure time and cannot be cancelled.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION);
+            }
+            String status = snapshot.getString("status");
+            if (!"OPEN".equalsIgnoreCase(status) && !"CLOSED".equalsIgnoreCase(status)) {
+                throw new FirebaseFirestoreException("This trip is not in a cancellable seat state.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION);
+            }
+
+            Map<String, Object> updates = new HashMap<>();
+            updates.put("status", "CLOSED");
+            updates.put("lifecycleStatus", TripLifecycleUtils.CANCELLED);
+            transaction.update(tripRef, updates);
+            return null;
+        }).addOnSuccessListener(unused -> callback.onSuccess())
+                .addOnFailureListener(error -> {
+                    String code = error instanceof FirebaseFirestoreException
+                            ? ((FirebaseFirestoreException) error).getCode().name()
+                            : error.getClass().getSimpleName();
+                    Log.e(TAG, "Trip cancellation transaction failed"
+                            + " operation=cancelTrip"
+                            + " exceptionClass=" + error.getClass().getSimpleName()
+                            + " code=" + code
+                            + " tripPath=/trips/" + tripId, error);
+                    callback.onFailure(error);
+                });
     }
 
     /** Hide a terminal trip from this user's home history without deleting shared records. */

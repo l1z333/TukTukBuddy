@@ -22,7 +22,7 @@
     <string name="status_ready">Ready for Ride Sharing</string>
     <string name="home_live_trips_title">Live Trips</string>
     <string name="home_my_upcoming_trips_title">My Upcoming Trips</string>
-    <string name="home_past_trips_title">Past Trips</string>
+    <string name="home_trip_history_button">Trip History</string>
     <string name="home_trip_lifecycle_label">Ride lifecycle: %1$s</string>
     <string name="home_trip_full_label">Full — no more passengers can join.</string>
     <string name="home_trip_lifecycle_unknown">Lifecycle unavailable for this older trip.</string>
@@ -30,7 +30,7 @@
     <string name="home_trip_cancel">Cancel Trip</string>
     <string name="home_trip_cancelling">Cancelling…</string>
     <string name="home_trip_cancel_title">Cancel this trip?</string>
-    <string name="home_trip_cancel_message">This cancels the entire ride, stops new requests, cancels pending and accepted requests, and notifies affected requesters. Seat counts and shared trip history will be preserved. This cannot be undone.</string>
+    <string name="home_trip_cancel_message">This marks the entire ride as cancelled and stops new requests. Existing request records will remain unchanged, and passengers will not be individually notified. Shared trip history will be preserved. This cannot be undone.</string>
     <string name="home_trip_cancel_confirm">Cancel trip</string>
     <string name="home_trip_cancel_details_unavailable">Trip details are unavailable; cancellation is disabled.</string>
     <string name="home_trip_cancel_creator_only">Only the trip creator can cancel this ride.</string>
@@ -42,13 +42,22 @@
         <item quantity="other">%1$d pending requests</item>
     </plurals>
     <string name="home_trip_complete_title">Mark this trip completed?</string>
-    <string name="home_trip_complete_message">This will move the trip to Past Trips for its participants. Seat counts and ride requests will not change.</string>
+    <string name="home_trip_complete_message">This moves the trip to Completed in Trip History for its participants. Seat counts and ride requests will not change.</string>
     <string name="home_trip_complete_confirm">Mark completed</string>
     <string name="home_trip_hide_history">Remove from my history</string>
     <string name="home_trip_hide_title">Remove trip from your history?</string>
-    <string name="home_trip_hide_message">This removes the trip only from your Past Trips list. Shared trip and request records stay unchanged.</string>
+    <string name="home_trip_hide_message">This removes the trip only from your personal Trip History. Shared trip, request, and notification records stay unchanged.</string>
     <string name="home_trip_hide_confirm">Remove</string>
-    <string name="home_trip_history_error">Past Trips could not be refreshed. Reconnecting…</string>
+    <string name="trip_history_title">Trip History</string>
+    <string name="trip_history_completed_tab">Completed</string>
+    <string name="trip_history_cancelled_tab">Cancelled</string>
+    <string name="trip_history_empty_completed">You have no completed trips yet.</string>
+    <string name="trip_history_empty_cancelled">You have no cancelled trips.</string>
+    <string name="trip_history_loading">Loading your trip history…</string>
+    <string name="trip_history_role_creator">You posted this trip</string>
+    <string name="trip_history_role_requester">You had a request for this trip</string>
+    <string name="trip_history_load_failed">Could not load Trip History. Check your connection and try again.</string>
+    <string name="trip_history_retry">Retry</string>
     <string name="home_live_trip_listener_error">Live trip updates are unavailable. Reconnecting…</string>
     <string name="home_trip_updates_title">Trip updates</string>
     <string name="home_live_trip_creator_label">You are driving</string>

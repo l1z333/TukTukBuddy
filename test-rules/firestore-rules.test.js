@@ -407,7 +407,7 @@ describe('Firestore Security Rules Tests for TukTukBuddy', () => {
     );
   });
 
-  it('blocks client-side whole-trip cancellation and prevents joins or acceptance after cancellation', async () => {
+  it('allows only the creator to cancel the trip and derives requester history from lifecycle', async () => {
     const cancelledTripId = 'trip_lifecycle_cancelled';
     const pendingRequestId = 'req_pending_for_cancelled_trip';
     const acceptedRequestId = 'req_accepted_for_cancelled_trip';
@@ -418,8 +418,8 @@ describe('Firestore Security Rules Tests for TukTukBuddy', () => {
         creatorUid: alexUid,
         creatorName: 'Alex Driver',
         availableSeats: 2,
-        status: 'CLOSED',
-        lifecycleStatus: 'CANCELLED',
+        status: 'OPEN',
+        lifecycleStatus: 'SCHEDULED',
         departureAt: new Date(Date.now() + 60 * 60 * 1000),
       });
       await db.collection('rideRequests').doc(pendingRequestId).set({
@@ -443,13 +443,74 @@ describe('Firestore Security Rules Tests for TukTukBuddy', () => {
     const strangerDb = testEnv.authenticatedContext(strangerUid).firestore();
 
     await assertFails(creatorDb.collection('trips').doc(cancelledTripId)
-      .update({ lifecycleStatus: 'CANCELLED', status: 'CLOSED' }));
+      .update({ lifecycleStatus: 'CANCELLED' }));
+    await assertFails(creatorDb.collection('trips').doc(cancelledTripId)
+      .update({
+        status: 'CLOSED',
+        lifecycleStatus: 'CANCELLED',
+        creatorUid: strangerUid,
+      }));
+    await assertFails(creatorDb.collection('trips').doc(cancelledTripId)
+      .update({
+        status: 'CLOSED',
+        lifecycleStatus: 'CANCELLED',
+        departureAt: new Date(Date.now() + 2 * 60 * 60 * 1000),
+      }));
+    await assertFails(creatorDb.collection('trips').doc(cancelledTripId)
+      .update({
+        status: 'CLOSED',
+        lifecycleStatus: 'CANCELLED',
+        availableSeats: 1,
+      }));
     await assertFails(requesterDb.collection('trips').doc(cancelledTripId)
       .update({ lifecycleStatus: 'CANCELLED' }));
+    await assertFails(requesterDb.collection('trips').doc(cancelledTripId)
+      .update({ status: 'CLOSED', lifecycleStatus: 'CANCELLED' }));
     await assertFails(requesterDb.collection('rideRequests').doc(pendingRequestId)
       .update({ status: 'TRIP_CANCELLED' }));
+
+    await assertSucceeds(creatorDb.collection('trips').doc(cancelledTripId)
+      .update({ lifecycleStatus: 'CANCELLED', status: 'CLOSED' }));
+
+    const cancelledTrip = await requesterDb.collection('trips').doc(cancelledTripId).get();
+    assert.equal(cancelledTrip.get('lifecycleStatus'), 'CANCELLED');
+    assert.equal(cancelledTrip.get('status'), 'CLOSED');
+    await assertFails(creatorDb.collection('trips').doc(cancelledTripId)
+      .update({ status: 'OPEN', lifecycleStatus: 'SCHEDULED' }));
+    const pendingRequest = await requesterDb.collection('rideRequests').doc(pendingRequestId).get();
+    const acceptedRequest = await strangerDb.collection('rideRequests').doc(acceptedRequestId).get();
+    assert.equal(pendingRequest.get('status'), 'PENDING');
+    assert.equal(acceptedRequest.get('status'), 'ACCEPTED');
+
+    // The personal requester query still returns the record, and its trip
+    // lifecycle now supplies the Cancelled history category.
+    const requesterHistory = await requesterDb.collection('rideRequests')
+      .where('requesterUid', '==', jordanUid).get();
+    assert.equal(requesterHistory.size, 1);
+    assert.equal(cancelledTrip.get('lifecycleStatus'), 'CANCELLED');
+    const acceptedRequesterHistory = await strangerDb.collection('rideRequests')
+      .where('requesterUid', '==', strangerUid).get();
+    assert.equal(acceptedRequesterHistory.size, 1);
+    const acceptedRequesterTrip = await strangerDb.collection('trips').doc(cancelledTripId).get();
+    assert.equal(acceptedRequesterTrip.get('lifecycleStatus'), 'CANCELLED');
+    await assertFails(cancelWithClient(strangerUid, cancelledTripId, acceptedRequestId));
+    assert.equal((await strangerDb.collection('rideRequests').doc(acceptedRequestId).get())
+      .get('status'), 'ACCEPTED');
+    assert.equal((await strangerDb.collection('trips').doc(cancelledTripId).get())
+      .get('availableSeats'), 2);
+
     await assertFails(creatorDb.collection('rideRequests').doc(pendingRequestId)
       .update({ status: 'ACCEPTED' }));
+    const acceptanceBatch = creatorDb.batch();
+    acceptanceBatch.update(creatorDb.collection('trips').doc(cancelledTripId), {
+      availableSeats: 1,
+      status: 'OPEN',
+      lastAcceptedRequestId: pendingRequestId,
+    });
+    acceptanceBatch.update(creatorDb.collection('rideRequests').doc(pendingRequestId), {
+      status: 'ACCEPTED',
+    });
+    await assertFails(acceptanceBatch.commit());
     await assertFails(strangerDb.collection('rideRequests').doc('req_after_cancellation').set({
       requestId: 'req_after_cancellation',
       tripId: cancelledTripId,
@@ -457,6 +518,61 @@ describe('Firestore Security Rules Tests for TukTukBuddy', () => {
       requesterUid: strangerUid,
       status: 'PENDING',
     }));
+  });
+
+  it('denies whole-trip cancellation after departure or outside scheduled lifecycle', async () => {
+    const ineligibleTrips = [
+      { id: 'trip_cancel_in_progress', lifecycleStatus: 'IN_PROGRESS', departureAt: new Date(Date.now() - 1) },
+      { id: 'trip_cancel_completed', lifecycleStatus: 'COMPLETED', departureAt: new Date(Date.now() - 1) },
+      { id: 'trip_cancel_departed', lifecycleStatus: 'SCHEDULED', departureAt: new Date(Date.now() - 60_000) },
+      { id: 'trip_cancel_missing_departure', lifecycleStatus: 'SCHEDULED' },
+    ];
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      const db = context.firestore();
+      for (const trip of ineligibleTrips) {
+        const tripData = {
+          tripId: trip.id,
+          creatorUid: alexUid,
+          availableSeats: 1,
+          status: 'OPEN',
+          lifecycleStatus: trip.lifecycleStatus,
+        };
+        if (trip.departureAt) tripData.departureAt = trip.departureAt;
+        await db.collection('trips').doc(trip.id).set(tripData);
+      }
+    });
+
+    const creatorDb = testEnv.authenticatedContext(alexUid).firestore();
+    for (const trip of ineligibleTrips) {
+      await assertFails(creatorDb.collection('trips').doc(trip.id)
+        .update({ status: 'CLOSED', lifecycleStatus: 'CANCELLED' }));
+    }
+  });
+
+  it('allows the creator to cancel an eligible full trip with CLOSED seat status', async () => {
+    const fullTripId = 'trip_cancel_full_closed';
+    await testEnv.withSecurityRulesDisabled(async (context) => {
+      await context.firestore().collection('trips').doc(fullTripId).set({
+        tripId: fullTripId,
+        creatorUid: alexUid,
+        availableSeats: 0,
+        status: 'CLOSED',
+        lifecycleStatus: 'SCHEDULED',
+        departureAt: new Date(Date.now() + 60 * 60 * 1000),
+      });
+    });
+
+    const creatorDb = testEnv.authenticatedContext(alexUid).firestore();
+    const tripRef = creatorDb.collection('trips').doc(fullTripId);
+    await assertSucceeds(tripRef.update({
+      status: 'CLOSED',
+      lifecycleStatus: 'CANCELLED',
+    }));
+
+    const tripSnapshot = await tripRef.get();
+    assert.equal(tripSnapshot.get('status'), 'CLOSED');
+    assert.equal(tripSnapshot.get('lifecycleStatus'), 'CANCELLED');
+    assert.equal(tripSnapshot.get('availableSeats'), 0);
   });
 
   it('allows only the affected passenger to read a whole-trip cancellation notification', async () => {
@@ -895,6 +1011,28 @@ describe('Firestore Security Rules Tests for TukTukBuddy', () => {
     assert.equal(requestSnapshot.get('status'), 'CANCELLED');
     assert.equal(notificationSnapshot.get('type'), 'REQUEST_CANCELLED');
     await assertFails(requesterDb.collection('tripNotifications').doc(cancellationRequestId).get());
+  });
+
+  it('cancels an accepted request addressed by its generated Firestore document ID', async () => {
+    const cancellationTripId = 'trip_cancel_generated_request_id';
+    const requesterDb = testEnv.authenticatedContext(jordanUid).firestore();
+    const generatedRequestRef = requesterDb.collection('rideRequests').doc();
+    const cancellationRequestId = generatedRequestRef.id;
+    await seedAcceptedCancellation({
+      tripId: cancellationTripId,
+      requestIds: [cancellationRequestId],
+    });
+
+    // Request creation uses the generated document ID as requestId; cancellation
+    // must use that same ID rather than the associated trip ID.
+    await assertSucceeds(cancelWithClient(jordanUid, cancellationTripId, cancellationRequestId));
+    await assertFails(cancelWithClient(jordanUid, cancellationTripId, cancellationRequestId));
+
+    const tripSnapshot = await requesterDb.collection('trips').doc(cancellationTripId).get();
+    const requestSnapshot = await generatedRequestRef.get();
+    assert.equal(requestSnapshot.get('requestId'), generatedRequestRef.id);
+    assert.equal(requestSnapshot.get('status'), 'CANCELLED');
+    assert.equal(tripSnapshot.get('availableSeats'), 3);
   });
 
   it('denies cancellation by a user who does not own the accepted request', async () => {

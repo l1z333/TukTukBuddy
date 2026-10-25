@@ -32,8 +32,10 @@ import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.ListenerRegistration;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
+import com.google.firebase.functions.FirebaseFunctionsException;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.Date;
@@ -57,29 +59,25 @@ public class HomeActivity extends AppCompatActivity {
 
     private MaterialCardView cardLiveTrips;
     private MaterialCardView cardMyUpcomingTrips;
-    private MaterialCardView cardPastTrips;
     private LinearLayout layoutLiveTrips;
     private LinearLayout layoutMyUpcomingTrips;
-    private LinearLayout layoutPastTrips;
     private LinearLayout layoutTripNotifications;
     private TextView tvTripNotificationsTitle;
     private TextView tvLiveTripError;
-    private TextView tvPastTripError;
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final Map<String, Trip> creatorTrips = new LinkedHashMap<>();
+    private final Map<String, Trip> creatorAcceptedTrips = new LinkedHashMap<>();
     private final Map<String, Map<String, RideRequest>> creatorAcceptedRequests = new HashMap<>();
     private final Map<String, Map<String, RideRequest>> creatorPendingRequests = new HashMap<>();
     private final Map<String, RideRequest> requesterAcceptedRequests = new LinkedHashMap<>();
-    private final Map<String, RideRequest> requesterCancelledRequests = new LinkedHashMap<>();
     private final Map<String, Trip> requesterTrips = new HashMap<>();
-    private final Set<String> hiddenTripIds = new LinkedHashSet<>();
     private final Map<String, ListenerRegistration> requesterTripListeners = new HashMap<>();
+    private final Map<String, ListenerRegistration> creatorAcceptedTripListeners = new HashMap<>();
     private final Set<String> cancellationInProgress = new LinkedHashSet<>();
     private final Set<String> tripCancellationInProgress = new LinkedHashSet<>();
     private final Set<String> completionInProgress = new LinkedHashSet<>();
     private final Set<String> lifecycleTransitionInProgress = new LinkedHashSet<>();
-    private final Set<String> historyHideInProgress = new LinkedHashSet<>();
     private final Set<String> liveListenerErrors = new LinkedHashSet<>();
     private final Set<String> requesterTripErrors = new LinkedHashSet<>();
     private final Map<String, Integer> listenerAttempts = new HashMap<>();
@@ -91,10 +89,10 @@ public class HomeActivity extends AppCompatActivity {
     private ListenerRegistration creatorRequestsListener;
     private ListenerRegistration requesterRequestsListener;
     private ListenerRegistration notificationsListener;
-    private ListenerRegistration hiddenTripsListener;
     private boolean liveListenersActive;
     private boolean activityStarted;
     private boolean creatorRequestsLoaded;
+    private boolean creatorTripsLoaded;
     private int liveListenerGeneration;
 
     private final Runnable liveTripRefresh = new Runnable() {
@@ -123,17 +121,15 @@ public class HomeActivity extends AppCompatActivity {
         Button btnMyRequests = findViewById(R.id.btnMyRequests);
         Button btnManageRequests = findViewById(R.id.btnManageRequests);
         Button btnResetProfile = findViewById(R.id.btnResetProfile);
+        Button btnTripHistory = findViewById(R.id.btnTripHistory);
 
         cardLiveTrips = findViewById(R.id.cardLiveTrips);
         cardMyUpcomingTrips = findViewById(R.id.cardMyUpcomingTrips);
-        cardPastTrips = findViewById(R.id.cardPastTrips);
         layoutLiveTrips = findViewById(R.id.layoutLiveTrips);
         layoutMyUpcomingTrips = findViewById(R.id.layoutMyUpcomingTrips);
-        layoutPastTrips = findViewById(R.id.layoutPastTrips);
         layoutTripNotifications = findViewById(R.id.layoutTripNotifications);
         tvTripNotificationsTitle = findViewById(R.id.tvTripNotificationsTitle);
         tvLiveTripError = findViewById(R.id.tvLiveTripError);
-        tvPastTripError = findViewById(R.id.tvPastTripError);
 
         loadAndDisplayUser();
 
@@ -151,6 +147,9 @@ public class HomeActivity extends AppCompatActivity {
             Intent intent = new Intent(HomeActivity.this, MyRequestsActivity.class);
             startActivity(intent);
         });
+
+        btnTripHistory.setOnClickListener(v ->
+                startActivity(new Intent(HomeActivity.this, TripHistoryActivity.class)));
 
         btnManageRequests.setOnClickListener(v -> {
             Intent intent = new Intent(HomeActivity.this, ManageRequestsActivity.class);
@@ -234,13 +233,13 @@ public class HomeActivity extends AppCompatActivity {
         Log.d(TAG, "Home Firestore listeners starting; authenticatedUidPresent=true");
         liveListenersActive = true;
         creatorRequestsLoaded = false;
+        creatorTripsLoaded = false;
         final int generation = ++liveListenerGeneration;
         FirebaseFirestore firestore = FirebaseFirestore.getInstance();
         attachCreatorTripsListener(firestore, uid, generation);
         attachCreatorRequestsListener(firestore, uid, generation);
         attachRequesterRequestsListener(firestore, uid, generation);
         attachNotificationsListener(firestore, uid, generation);
-        attachHiddenTripsListener(firestore, uid, generation);
     }
 
     private void attachCreatorTripsListener(FirebaseFirestore firestore, String uid, int generation) {
@@ -249,6 +248,8 @@ public class HomeActivity extends AppCompatActivity {
         final int attempt = nextListenerAttempt(key);
         creatorTripsListener = firestore.collection("trips")
                 .whereEqualTo("creatorUid", uid)
+                .whereIn("lifecycleStatus", Arrays.asList(
+                        TripLifecycleUtils.SCHEDULED, TripLifecycleUtils.IN_PROGRESS))
                 .addSnapshotListener((snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
@@ -256,6 +257,8 @@ public class HomeActivity extends AppCompatActivity {
                         failLiveListener(key, creatorTripsListener, error, null, null);
                         creatorTripsListener = null;
                         creatorTrips.clear();
+                        creatorTripsLoaded = false;
+                        reconcileCreatorAcceptedTripListeners(firestore);
                         renderLiveTrips();
                         scheduleListenerRetry(key, () -> attachCreatorTripsListener(firestore, uid, generation));
                         return;
@@ -266,6 +269,8 @@ public class HomeActivity extends AppCompatActivity {
                         LiveTripPolicy.addTripByDocumentId(creatorTrips, document.getId(), trip);
                         persistInProgressIfDue(document.getId(), trip);
                     }
+                    creatorTripsLoaded = true;
+                    reconcileCreatorAcceptedTripListeners(firestore);
                     recoverLiveListener(key);
                     renderLiveTrips();
                 });
@@ -299,12 +304,94 @@ public class HomeActivity extends AppCompatActivity {
         });
     }
 
+    /** Fetch accepted legacy trips individually without querying completed-trip history. */
+    private void reconcileCreatorAcceptedTripListeners(FirebaseFirestore firestore) {
+        if (!creatorTripsLoaded || !isActiveActivity()) return;
+        Set<String> requiredTripIds = new LinkedHashSet<>();
+        for (String tripId : creatorAcceptedRequests.keySet()) {
+            if (!creatorTrips.containsKey(tripId)) requiredTripIds.add(tripId);
+        }
+
+        List<String> obsoleteIds = new ArrayList<>();
+        for (String tripId : creatorAcceptedTripListeners.keySet()) {
+            if (!requiredTripIds.contains(tripId)) obsoleteIds.add(tripId);
+        }
+        for (String tripId : obsoleteIds) {
+            ListenerRegistration listener = creatorAcceptedTripListeners.remove(tripId);
+            if (listener != null) listener.remove();
+            creatorAcceptedTrips.remove(tripId);
+            String key = "creatorAcceptedTrip:" + tripId;
+            Runnable retry = listenerRetries.remove(key);
+            if (retry != null) mainHandler.removeCallbacks(retry);
+            listenerAttempts.remove(key);
+            listenerRetryCounts.remove(key);
+            liveListenerErrors.remove(key);
+        }
+
+        for (String tripId : requiredTripIds) {
+            if (!creatorAcceptedTripListeners.containsKey(tripId)) {
+                attachCreatorAcceptedTripListener(firestore, tripId, liveListenerGeneration);
+            }
+        }
+    }
+
+    private void attachCreatorAcceptedTripListener(FirebaseFirestore firestore, String tripId, int generation) {
+        final String key = "creatorAcceptedTrip:" + tripId;
+        if (!isCurrentLiveListener(generation) || creatorAcceptedTripListeners.containsKey(tripId)
+                || !creatorAcceptedRequests.containsKey(tripId)) return;
+        final int attempt = nextListenerAttempt(key);
+        final ListenerRegistration[] registration = new ListenerRegistration[1];
+        registration[0] = firestore.collection("trips").document(tripId)
+                .addSnapshotListener((snapshot, error) -> {
+                    if (!isCurrentListenerAttempt(generation, key, attempt)
+                            || !creatorAcceptedTripListeners.containsKey(tripId)) return;
+                    if (error != null || snapshot == null) {
+                        invalidateListenerAttempt(key, attempt);
+                        failLiveListener(key, registration[0], error, tripId,
+                                firstCreatorAcceptedRequestId(tripId));
+                        creatorAcceptedTripListeners.remove(tripId);
+                        if (registration[0] != null) registration[0].remove();
+                        creatorAcceptedTrips.remove(tripId);
+                        renderLiveTrips();
+                        scheduleListenerRetry(key, () -> attachCreatorAcceptedTripListener(
+                                firestore, tripId, generation));
+                        return;
+                    }
+                    if (!snapshot.exists()) {
+                        creatorAcceptedTrips.remove(tripId);
+                    } else {
+                        Trip trip = snapshot.toObject(Trip.class);
+                        if (trip != null && !TripLifecycleUtils.isTerminal(trip)) {
+                            trip.setTripId(snapshot.getId());
+                            creatorAcceptedTrips.put(tripId, trip);
+                        } else {
+                            creatorAcceptedTrips.remove(tripId);
+                        }
+                    }
+                    recoverLiveListener(key);
+                    renderLiveTrips();
+                });
+        creatorAcceptedTripListeners.put(tripId, registration[0]);
+    }
+
+    private String firstCreatorAcceptedRequestId(String tripId) {
+        Map<String, RideRequest> requests = creatorAcceptedRequests.get(tripId);
+        if (requests == null || requests.isEmpty()) return null;
+        return requests.values().iterator().next().getRequestId();
+    }
+
+    private Trip creatorTripFor(String tripId) {
+        Trip trip = creatorTrips.get(tripId);
+        return trip != null ? trip : creatorAcceptedTrips.get(tripId);
+    }
+
     private void attachCreatorRequestsListener(FirebaseFirestore firestore, String uid, int generation) {
         if (!isCurrentLiveListener(generation) || creatorRequestsListener != null) return;
         final String key = "creatorRequests";
         final int attempt = nextListenerAttempt(key);
         creatorRequestsListener = firestore.collection("rideRequests")
                 .whereEqualTo("creatorUid", uid)
+                .whereIn("status", Arrays.asList("PENDING", "ACCEPTED"))
                 .addSnapshotListener((snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
@@ -314,6 +401,7 @@ public class HomeActivity extends AppCompatActivity {
                         creatorAcceptedRequests.clear();
                         creatorPendingRequests.clear();
                         creatorRequestsLoaded = false;
+                        reconcileCreatorAcceptedTripListeners(firestore);
                         renderLiveTrips();
                         scheduleListenerRetry(key, () -> attachCreatorRequestsListener(firestore, uid, generation));
                         return;
@@ -336,6 +424,7 @@ public class HomeActivity extends AppCompatActivity {
                         }
                     }
                     creatorRequestsLoaded = true;
+                    reconcileCreatorAcceptedTripListeners(firestore);
                     recoverLiveListener(key);
                     renderLiveTrips();
                 });
@@ -347,6 +436,7 @@ public class HomeActivity extends AppCompatActivity {
         final int attempt = nextListenerAttempt(key);
         requesterRequestsListener = firestore.collection("rideRequests")
                 .whereEqualTo("requesterUid", uid)
+                .whereEqualTo("status", "ACCEPTED")
                 .addSnapshotListener((snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
@@ -354,7 +444,6 @@ public class HomeActivity extends AppCompatActivity {
                         failLiveListener(key, requesterRequestsListener, error, null, null);
                         requesterRequestsListener = null;
                         requesterAcceptedRequests.clear();
-                        requesterCancelledRequests.clear();
                         clearRequesterTripListeners();
                         requesterTrips.clear();
                         requesterTripErrors.clear();
@@ -363,16 +452,11 @@ public class HomeActivity extends AppCompatActivity {
                         return;
                     }
                     requesterAcceptedRequests.clear();
-                    requesterCancelledRequests.clear();
                     for (QueryDocumentSnapshot document : snapshots) {
                         RideRequest request = toRideRequest(document);
                         if (LiveTripPolicy.isAcceptedRequest(request)) {
                             LiveTripPolicy.addRequestByDocumentId(
                                     requesterAcceptedRequests, document.getId(), request);
-                        } else if ("CANCELLED".equalsIgnoreCase(request.getStatus())
-                                || "TRIP_CANCELLED".equalsIgnoreCase(request.getStatus())) {
-                            LiveTripPolicy.addRequestByDocumentId(
-                                    requesterCancelledRequests, document.getId(), request);
                         }
                     }
                     reconcileRequesterTripListeners(firestore);
@@ -391,6 +475,11 @@ public class HomeActivity extends AppCompatActivity {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
                         invalidateListenerAttempt(key, attempt);
+                        Log.e(TAG, "Home listener failed operation=loadTripNotifications"
+                                + " collection=tripNotifications query=recipientUid"
+                                + " exceptionClass=" + (error != null
+                                ? error.getClass().getSimpleName() : "NO_SNAPSHOT")
+                                + " code=" + firebaseErrorCode(error), error);
                         failLiveListener(key, notificationsListener, error, null, null);
                         notificationsListener = null;
                         tripNotifications.clear();
@@ -400,32 +489,6 @@ public class HomeActivity extends AppCompatActivity {
                     }
                     tripNotifications = new ArrayList<>(snapshots.getDocuments());
                     recoverLiveListener(key);
-                    renderLiveTrips();
-                });
-    }
-
-    private void attachHiddenTripsListener(FirebaseFirestore firestore, String uid, int generation) {
-        if (!isCurrentLiveListener(generation) || hiddenTripsListener != null) return;
-        final String key = "hiddenTrips";
-        final int attempt = nextListenerAttempt(key);
-        hiddenTripsListener = firestore.collection("users").document(uid).collection("hiddenTrips")
-                .addSnapshotListener((snapshots, error) -> {
-                    if (!isCurrentListenerAttempt(generation, key, attempt)) return;
-                    if (error != null || snapshots == null) {
-                        invalidateListenerAttempt(key, attempt);
-                        failLiveListener(key, hiddenTripsListener, error, null, null);
-                        hiddenTripsListener = null;
-                        hiddenTripIds.clear();
-                        tvPastTripError.setVisibility(View.VISIBLE);
-                        tvPastTripError.setText(R.string.home_trip_history_error);
-                        renderPastTrips(System.currentTimeMillis());
-                        scheduleListenerRetry(key, () -> attachHiddenTripsListener(firestore, uid, generation));
-                        return;
-                    }
-                    hiddenTripIds.clear();
-                    for (QueryDocumentSnapshot document : snapshots) hiddenTripIds.add(document.getId());
-                    recoverLiveListener(key);
-                    tvPastTripError.setVisibility(View.GONE);
                     renderLiveTrips();
                 });
     }
@@ -441,28 +504,29 @@ public class HomeActivity extends AppCompatActivity {
         removeListener(creatorRequestsListener);
         removeListener(requesterRequestsListener);
         removeListener(notificationsListener);
-        removeListener(hiddenTripsListener);
+        for (ListenerRegistration listener : creatorAcceptedTripListeners.values()) {
+            if (listener != null) listener.remove();
+        }
+        creatorAcceptedTripListeners.clear();
         creatorTripsListener = null;
         creatorRequestsListener = null;
         requesterRequestsListener = null;
         notificationsListener = null;
-        hiddenTripsListener = null;
 
         clearRequesterTripListeners();
         creatorTrips.clear();
+        creatorAcceptedTrips.clear();
+        creatorTripsLoaded = false;
         creatorAcceptedRequests.clear();
         creatorPendingRequests.clear();
         creatorRequestsLoaded = false;
         requesterAcceptedRequests.clear();
-        requesterCancelledRequests.clear();
         requesterTrips.clear();
-        hiddenTripIds.clear();
         tripNotifications.clear();
         cancellationInProgress.clear();
         tripCancellationInProgress.clear();
         completionInProgress.clear();
         lifecycleTransitionInProgress.clear();
-        historyHideInProgress.clear();
         liveListenerErrors.clear();
         requesterTripErrors.clear();
         listenerAttempts.clear();
@@ -471,13 +535,10 @@ public class HomeActivity extends AppCompatActivity {
         if (layoutMyUpcomingTrips != null && layoutMyUpcomingTrips.getChildCount() > 1) {
             layoutMyUpcomingTrips.removeViews(1, layoutMyUpcomingTrips.getChildCount() - 1);
         }
-        if (layoutPastTrips != null) layoutPastTrips.removeAllViews();
         if (layoutTripNotifications != null) layoutTripNotifications.removeAllViews();
         if (tvTripNotificationsTitle != null) tvTripNotificationsTitle.setVisibility(View.GONE);
         if (cardLiveTrips != null) cardLiveTrips.setVisibility(View.GONE);
         if (cardMyUpcomingTrips != null) cardMyUpcomingTrips.setVisibility(View.GONE);
-        if (cardPastTrips != null) cardPastTrips.setVisibility(View.GONE);
-        if (tvPastTripError != null) tvPastTripError.setVisibility(View.GONE);
     }
 
     private void removeListener(ListenerRegistration listener) {
@@ -566,7 +627,7 @@ public class HomeActivity extends AppCompatActivity {
     private void updateListenerErrorView() {
         boolean hasErrors = false;
         for (String error : liveListenerErrors) {
-            if (!"notifications".equals(error) && !"hiddenTrips".equals(error)) {
+            if (!"notifications".equals(error)) {
                 hasErrors = true;
                 break;
             }
@@ -607,11 +668,6 @@ public class HomeActivity extends AppCompatActivity {
     private void reconcileRequesterTripListeners(FirebaseFirestore firestore) {
         Set<String> requiredTripIds = new LinkedHashSet<>();
         for (RideRequest request : requesterAcceptedRequests.values()) {
-            if (request.getTripId() != null && !request.getTripId().isEmpty()) {
-                requiredTripIds.add(request.getTripId());
-            }
-        }
-        for (RideRequest request : requesterCancelledRequests.values()) {
             if (request.getTripId() != null && !request.getTripId().isEmpty()) {
                 requiredTripIds.add(request.getTripId());
             }
@@ -684,17 +740,11 @@ public class HomeActivity extends AppCompatActivity {
         for (RideRequest request : requesterAcceptedRequests.values()) {
             if (tripId.equals(request.getTripId())) return true;
         }
-        for (RideRequest request : requesterCancelledRequests.values()) {
-            if (tripId.equals(request.getTripId())) return true;
-        }
         return false;
     }
 
     private String firstRequesterIdForTrip(String tripId) {
         for (RideRequest request : requesterAcceptedRequests.values()) {
-            if (tripId.equals(request.getTripId())) return request.getRequestId();
-        }
-        for (RideRequest request : requesterCancelledRequests.values()) {
             if (tripId.equals(request.getTripId())) return request.getRequestId();
         }
         return null;
@@ -709,7 +759,7 @@ public class HomeActivity extends AppCompatActivity {
 
         Map<String, Trip> creatorLive = new LinkedHashMap<>();
         for (Map.Entry<String, Map<String, RideRequest>> entry : creatorAcceptedRequests.entrySet()) {
-            Trip trip = creatorTrips.get(entry.getKey());
+            Trip trip = creatorTripFor(entry.getKey());
             if (LiveTripPolicy.isLiveCreatorTrip(trip, entry.getValue().size(), now)) {
                 creatorLive.put(entry.getKey(), trip);
             }
@@ -741,7 +791,6 @@ public class HomeActivity extends AppCompatActivity {
                 ? View.VISIBLE : View.GONE);
 
         renderMyUpcomingTrips(now, currentUid);
-        renderPastTrips(now);
     }
 
     /** Posted trips with no accepted passengers stay out of Live Trips. */
@@ -776,7 +825,7 @@ public class HomeActivity extends AppCompatActivity {
 
     private boolean hasLiveListenerError() {
         for (String key : liveListenerErrors) {
-            if (!"notifications".equals(key) && !"hiddenTrips".equals(key)) return true;
+            if (!"notifications".equals(key)) return true;
         }
         return false;
     }
@@ -871,63 +920,6 @@ public class HomeActivity extends AppCompatActivity {
             target.addView(createLiveText(disabledReason, 13, false), liveTextLayoutParams(2));
         }
         addDivider(target);
-    }
-
-    private void renderPastTrips(long now) {
-        if (layoutPastTrips == null) return;
-        layoutPastTrips.removeAllViews();
-        boolean hiddenListenerFailed = liveListenerErrors.contains("hiddenTrips");
-        tvPastTripError.setVisibility(hiddenListenerFailed ? View.VISIBLE : View.GONE);
-        if (hiddenListenerFailed) tvPastTripError.setText(R.string.home_trip_history_error);
-        if (hiddenListenerFailed) {
-            // Without the personal archive markers, showing trips could undo
-            // the user's hide action. Keep history unavailable until retry.
-            cardPastTrips.setVisibility(View.VISIBLE);
-            return;
-        }
-
-        Map<String, Trip> past = new LinkedHashMap<>();
-        for (Map.Entry<String, Trip> entry : creatorTrips.entrySet()) {
-            if (TripLifecycleUtils.isTerminal(entry.getValue())) past.put(entry.getKey(), entry.getValue());
-        }
-        Map<String, RideRequest> requesterHistory = new LinkedHashMap<>(requesterAcceptedRequests);
-        requesterHistory.putAll(requesterCancelledRequests);
-        for (RideRequest request : requesterHistory.values()) {
-            Trip trip = requesterTrips.get(request.getTripId());
-            if (TripLifecycleUtils.isTerminal(trip)) past.putIfAbsent(request.getTripId(), trip);
-        }
-
-        int visiblePastCount = 0;
-        for (Map.Entry<String, Trip> entry : past.entrySet()) {
-            if (hiddenTripIds.contains(entry.getKey())) continue;
-            visiblePastCount++;
-            addTripDetails(layoutPastTrips, entry.getValue(), now);
-            Map<String, RideRequest> passengers = creatorAcceptedRequests.get(entry.getKey());
-            if (passengers != null) {
-                for (RideRequest passenger : passengers.values()) {
-                    String name = passenger.getRequesterName() != null
-                            ? passenger.getRequesterName() : "Passenger";
-                    layoutPastTrips.addView(createLiveText(name + " — " + passenger.getStatus(),
-                            14, false), liveTextLayoutParams(3));
-                }
-            } else {
-                for (RideRequest request : requesterHistory.values()) {
-                    if (entry.getKey().equals(request.getTripId())) {
-                        layoutPastTrips.addView(createLiveText(
-                                getString(R.string.home_request_status_label, request.getStatus()),
-                                14, false), liveTextLayoutParams(4));
-                        break;
-                    }
-                }
-            }
-            MaterialButton hideButton = new MaterialButton(this);
-            hideButton.setText(R.string.home_trip_hide_history);
-            hideButton.setEnabled(!historyHideInProgress.contains(entry.getKey()));
-            layoutPastTrips.addView(hideButton, liveTextLayoutParams(8));
-            hideButton.setOnClickListener(v -> confirmHideTrip(entry.getKey()));
-            addDivider(layoutPastTrips);
-        }
-        cardPastTrips.setVisibility(visiblePastCount > 0 ? View.VISIBLE : View.GONE);
     }
 
     private void addTripDetails(LinearLayout target, Trip trip, long now) {
@@ -1034,6 +1026,8 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onSuccess() {
                 cancellationInProgress.remove(request.getRequestId());
+                Log.i(TAG, "Home operation succeeded operation=requesterCancel"
+                        + " requestPath=/rideRequests/" + request.getRequestId());
                 Toast.makeText(HomeActivity.this, "Your request was cancelled.", Toast.LENGTH_SHORT).show();
                 renderLiveTrips();
             }
@@ -1041,6 +1035,10 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onFailure(Exception e) {
                 cancellationInProgress.remove(request.getRequestId());
+                logHomeOperationFailure("requesterCancel",
+                        "requestPath=/rideRequests/" + request.getRequestId()
+                                + " tripPath=/trips/" + request.getTripId()
+                                + " notificationPath=/tripNotifications/" + request.getRequestId(), e);
                 String message = e != null && e.getMessage() != null
                         ? e.getMessage() : "Could not cancel the request.";
                 Toast.makeText(HomeActivity.this, message, Toast.LENGTH_LONG).show();
@@ -1092,10 +1090,12 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onSuccess() {
                 tripCancellationInProgress.remove(tripId);
+                Log.i(TAG, "Home operation succeeded operation=posterCancelFirestoreTransaction"
+                        + " tripPath=/trips/" + tripId);
                 trip.setStatus("CLOSED");
                 trip.setLifecycleStatus(TripLifecycleUtils.CANCELLED);
                 creatorTrips.put(tripId, trip);
-                Toast.makeText(HomeActivity.this, "Trip cancelled. Affected passengers were notified.",
+                Toast.makeText(HomeActivity.this, "Trip cancelled. It is available in Trip History.",
                         Toast.LENGTH_LONG).show();
                 renderLiveTrips();
             }
@@ -1103,6 +1103,8 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onFailure(Exception e) {
                 tripCancellationInProgress.remove(tripId);
+                logHomeOperationFailure("posterCancelFirestoreTransaction",
+                        "tripPath=/trips/" + tripId, e);
                 String message = e != null && e.getMessage() != null
                         ? e.getMessage() : "Could not cancel the trip.";
                 Toast.makeText(HomeActivity.this, message, Toast.LENGTH_LONG).show();
@@ -1119,6 +1121,8 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onSuccess() {
                 completionInProgress.remove(tripId);
+                Log.i(TAG, "Home operation succeeded operation=markTripCompleted"
+                        + " tripPath=/trips/" + tripId);
                 trip.setLifecycleStatus(TripLifecycleUtils.COMPLETED);
                 Toast.makeText(HomeActivity.this, "Trip marked completed.", Toast.LENGTH_SHORT).show();
                 renderLiveTrips();
@@ -1127,6 +1131,8 @@ public class HomeActivity extends AppCompatActivity {
             @Override
             public void onFailure(Exception e) {
                 completionInProgress.remove(tripId);
+                logHomeOperationFailure("markTripCompleted",
+                        "tripPath=/trips/" + tripId, e);
                 String message = e != null && e.getMessage() != null
                         ? e.getMessage() : "Could not complete the trip.";
                 Toast.makeText(HomeActivity.this, message, Toast.LENGTH_LONG).show();
@@ -1135,46 +1141,28 @@ public class HomeActivity extends AppCompatActivity {
         });
     }
 
-    private void confirmHideTrip(String tripId) {
-        new MaterialAlertDialogBuilder(this)
-                .setTitle(R.string.home_trip_hide_title)
-                .setMessage(R.string.home_trip_hide_message)
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.home_trip_hide_confirm,
-                        (dialog, which) -> hideTripFromHistory(tripId))
-                .show();
-    }
-
-    private void hideTripFromHistory(String tripId) {
-        FirebaseUser currentUser = userRepository.getCurrentFirebaseUser();
-        if (currentUser == null || !historyHideInProgress.add(tripId)) return;
-        renderPastTrips(System.currentTimeMillis());
-        new TripRepository().hideTripFromHistory(currentUser.getUid(), tripId,
-                new TripRepository.ActionCallback() {
-                    @Override
-                    public void onSuccess() {
-                        historyHideInProgress.remove(tripId);
-                        hiddenTripIds.add(tripId);
-                        Toast.makeText(HomeActivity.this, "Trip removed from your history.",
-                                Toast.LENGTH_SHORT).show();
-                        renderPastTrips(System.currentTimeMillis());
-                    }
-
-                    @Override
-                    public void onFailure(Exception e) {
-                        historyHideInProgress.remove(tripId);
-                        String message = e != null && e.getMessage() != null
-                                ? e.getMessage() : "Could not update your trip history.";
-                        Toast.makeText(HomeActivity.this, message, Toast.LENGTH_LONG).show();
-                        renderPastTrips(System.currentTimeMillis());
-                    }
-                });
-    }
-
     private void redirectToOnboarding() {
         Intent intent = new Intent(HomeActivity.this, MainActivity.class);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_CLEAR_TASK);
         startActivity(intent);
         finish();
+    }
+
+    private String firebaseErrorCode(Exception error) {
+        if (error instanceof FirebaseFirestoreException) {
+            return ((FirebaseFirestoreException) error).getCode().name();
+        }
+        if (error instanceof FirebaseFunctionsException) {
+            return ((FirebaseFunctionsException) error).getCode().name();
+        }
+        return error != null ? error.getClass().getSimpleName() : "NO_ERROR_OBJECT";
+    }
+
+    private void logHomeOperationFailure(String operation, String path, Exception error) {
+        Log.e(TAG, "Home operation failed operation=" + operation
+                + " exceptionClass=" + (error != null
+                ? error.getClass().getSimpleName() : "NO_ERROR_OBJECT")
+                + " code=" + firebaseErrorCode(error)
+                + " " + path, error);
     }
 }

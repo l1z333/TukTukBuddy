@@ -61,6 +61,14 @@ public final class TripLifecycleUtils {
                 || SCHEDULED.equalsIgnoreCase(trip.getLifecycleStatus()));
     }
 
+    /** Pending requests for a cancelled trip must not expose creator actions. */
+    public static boolean shouldOfferManageActions(RideRequest request, Trip trip) {
+        return request != null
+                && "PENDING".equalsIgnoreCase(request.getStatus())
+                && trip != null
+                && !CANCELLED.equalsIgnoreCase(trip.getLifecycleStatus());
+    }
+
     public static boolean isLiveAcceptedRide(Trip trip, RideRequest request, long nowMillis) {
         return request != null
                 && "ACCEPTED".equalsIgnoreCase(request.getStatus())

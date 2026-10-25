@@ -4,6 +4,7 @@ import com.example.tuktukbuddy.model.Trip;
 import com.example.tuktukbuddy.model.RideRequest;
 import com.example.tuktukbuddy.util.LiveTripPolicy;
 import com.example.tuktukbuddy.util.TripLifecycleUtils;
+import com.example.tuktukbuddy.util.TripHistoryPolicy;
 import com.example.tuktukbuddy.util.TripTimeUtils;
 
 import org.junit.Test;
@@ -57,6 +58,8 @@ public class TripAvailabilityTest {
         Trip openWithSeats = scheduledTrip("OPEN", 1, departure);
         Trip fullAndClosed = scheduledTrip("CLOSED", 0, departure);
         Trip noSeatsButOpen = scheduledTrip("OPEN", 0, departure);
+        Trip cancelled = scheduledTrip("CLOSED", 1, departure);
+        cancelled.setLifecycleStatus(TripLifecycleUtils.CANCELLED);
         Trip alreadyDeparted = scheduledTrip("OPEN", 1, new Date(departure.getTime() - 1L));
         RideRequest accepted = request("trip-A", "Same Route");
         RideRequest pending = request("trip-A", "Same Route");
@@ -79,6 +82,12 @@ public class TripAvailabilityTest {
         assertTrue("After departure an accepted ride remains live until explicitly completed",
                 LiveTripPolicy.isLiveRequesterRide(accepted, alreadyDeparted, departure.getTime()));
         assertFalse(LiveTripPolicy.isLiveRequesterRide(pending, openWithSeats, justBeforeDeparture));
+        assertFalse("Cancelled creator trips are not live",
+                LiveTripPolicy.isLiveCreatorTrip(cancelled, 1, justBeforeDeparture));
+        assertFalse("Cancelled creator trips are not upcoming",
+                LiveTripPolicy.isUpcomingCreatorTrip(cancelled, 0, justBeforeDeparture));
+        assertFalse("Cancelled requester rides are not live",
+                LiveTripPolicy.isLiveRequesterRide(accepted, cancelled, justBeforeDeparture));
     }
 
     @Test
@@ -174,6 +183,44 @@ public class TripAvailabilityTest {
         assertFalse(TripLifecycleUtils.canCancel(scheduled, "creator", 10_000L));
         assertFalse(TripLifecycleUtils.canCancel(inProgress, "creator", 2_000L));
         assertFalse(TripLifecycleUtils.canCancel(legacy, "creator", 1L));
+    }
+
+    @Test
+    public void cancelledPendingRequestsDoNotOfferCreatorManagementActions() {
+        RideRequest pending = request("trip-cancelled", "Same Route");
+        pending.setStatus("PENDING");
+        Trip scheduled = scheduledTrip("OPEN", 1, new Date(10_000L));
+        Trip cancelled = scheduledTrip("CLOSED", 1, new Date(10_000L));
+        cancelled.setLifecycleStatus(TripLifecycleUtils.CANCELLED);
+
+        assertTrue(TripLifecycleUtils.shouldOfferManageActions(pending, scheduled));
+        assertFalse(TripLifecycleUtils.shouldOfferManageActions(pending, cancelled));
+        assertFalse(TripLifecycleUtils.shouldOfferManageActions(pending, null));
+    }
+
+    @Test
+    public void tripHistorySeparatesCompletedAndPosterCancelledRides() {
+        assertEquals(TripHistoryPolicy.Category.COMPLETED,
+                TripHistoryPolicy.categoryForLifecycle(TripLifecycleUtils.COMPLETED));
+        assertEquals(TripHistoryPolicy.Category.CANCELLED,
+                TripHistoryPolicy.categoryForLifecycle(TripLifecycleUtils.CANCELLED));
+        assertNull(TripHistoryPolicy.categoryForLifecycle(TripLifecycleUtils.SCHEDULED));
+        assertTrue(TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.COMPLETED,
+                java.util.Collections.singletonList("ACCEPTED")));
+        assertTrue(TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.CANCELLED,
+                java.util.Collections.singletonList("ACCEPTED")));
+        assertTrue("A pending requester uses the trip lifecycle as cancellation state",
+                TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.CANCELLED,
+                        java.util.Collections.singletonList("PENDING")));
+        assertFalse(TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.CANCELLED,
+                java.util.Collections.emptyList()));
+        assertFalse("An individually cancelled request is not trip history while the trip is active",
+                TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.SCHEDULED,
+                        java.util.Collections.singletonList("CANCELLED")));
+        assertTrue(TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.CANCELLED,
+                java.util.Collections.singletonList("TRIP_CANCELLED")));
+        assertFalse(TripHistoryPolicy.requesterWasAffected(TripLifecycleUtils.COMPLETED,
+                java.util.Collections.singletonList("TRIP_CANCELLED")));
     }
 
     @Test
