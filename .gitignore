@@ -13,3 +13,5 @@
 .externalNativeBuild
 .cxx
 local.properties
+/test-rules/node_modules/
+/firestore-debug.log

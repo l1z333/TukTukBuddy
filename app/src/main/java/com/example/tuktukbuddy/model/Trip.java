@@ -2,6 +2,7 @@ package com.example.tuktukbuddy.model;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Date;
 
 public class Trip {
     private String tripId;
@@ -13,8 +14,11 @@ public class Trip {
     private String time;
     private int availableSeats;
     private String notes;
+    // Seat availability only: OPEN/CLOSED does not describe ride completion.
     private String status;
+    private String lifecycleStatus;
     private long createdAt;
+    private Date departureAt;
 
     // Required empty constructor for Firestore deserialization
     public Trip() {
@@ -116,12 +120,36 @@ public class Trip {
         this.status = status;
     }
 
+    public String getLifecycleStatus() {
+        return lifecycleStatus;
+    }
+
+    public void setLifecycleStatus(String lifecycleStatus) {
+        this.lifecycleStatus = lifecycleStatus;
+    }
+
     public long getCreatedAt() {
         return createdAt;
     }
 
     public void setCreatedAt(long createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public Date getDepartureAt() {
+        return departureAt;
+    }
+
+    public void setDepartureAt(Date departureAt) {
+        this.departureAt = departureAt;
+    }
+
+    public boolean isAvailableForBrowsing() {
+        return "OPEN".equalsIgnoreCase(status) && availableSeats > 0;
+    }
+
+    public static String statusAfterAcceptingSeat(int remainingSeats) {
+        return remainingSeats <= 0 ? "CLOSED" : "OPEN";
     }
 
     public Map<String, Object> toMap() {
@@ -136,7 +164,13 @@ public class Trip {
         map.put("availableSeats", availableSeats);
         map.put("notes", notes != null ? notes : "");
         map.put("status", status != null ? status : "OPEN");
+        if (lifecycleStatus != null && !lifecycleStatus.trim().isEmpty()) {
+            map.put("lifecycleStatus", lifecycleStatus);
+        }
         map.put("createdAt", createdAt);
+        if (departureAt != null) {
+            map.put("departureAt", departureAt);
+        }
         return map;
     }
 }

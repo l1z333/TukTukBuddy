@@ -4,16 +4,20 @@ import android.util.Log;
 
 import com.example.tuktukbuddy.model.RideRequest;
 import com.example.tuktukbuddy.model.Trip;
+import com.example.tuktukbuddy.util.TripTimeUtils;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentReference;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.FieldValue;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class RideRequestRepository {
     private final FirebaseFirestore firestore;
@@ -112,8 +116,8 @@ public class RideRequestRepository {
 
                                 String dateTime = String.format(
                                         "%s %s",
-                                        trip.getDate(),
-                                        trip.getTime()
+                                        TripTimeUtils.getDisplayDate(trip),
+                                        TripTimeUtils.getDisplayTime(trip)
                                 );
 
                                 RideRequest request = new RideRequest(
@@ -339,11 +343,8 @@ public class RideRequestRepository {
                     Log.d("RideRequestRepo", "Applying transaction updates - newSeats: " + newSeats);
 
                     transaction.update(tripRef, "availableSeats", newSeats);
+                    transaction.update(tripRef, "status", Trip.statusAfterAcceptingSeat(newSeats));
                     transaction.update(tripRef, "lastAcceptedRequestId", request.getRequestId());
-
-                    if (newSeats == 0) {
-                        transaction.update(tripRef, "status", "CLOSED");
-                    }
 
                     transaction.update(requestRef, "status", "ACCEPTED");
 
@@ -423,6 +424,108 @@ public class RideRequestRepository {
 
                     return null;
                 }).addOnSuccessListener(aVoid -> callback.onSuccess())
+                .addOnFailureListener(callback::onFailure);
+    }
+
+    public void cancelAcceptedRequest(
+            RideRequest request,
+            ActionCallback callback
+    ) {
+        if (request == null || request.getRequestId() == null || request.getTripId() == null) {
+            callback.onFailure(new Exception("Invalid request details."));
+            return;
+        }
+
+        FirebaseUser currentUser = FirebaseAuth.getInstance().getCurrentUser();
+        if (currentUser == null) {
+            callback.onFailure(new Exception("Authentication required to cancel a request."));
+            return;
+        }
+
+        DocumentReference tripRef = firestore.collection("trips").document(request.getTripId());
+        DocumentReference requestRef = firestore.collection("rideRequests").document(request.getRequestId());
+        DocumentReference notificationRef = firestore.collection("tripNotifications")
+                .document(request.getRequestId());
+
+        firestore.runTransaction(transaction -> {
+            DocumentSnapshot tripSnapshot = transaction.get(tripRef);
+            DocumentSnapshot requestSnapshot = transaction.get(requestRef);
+
+            if (!tripSnapshot.exists() || !requestSnapshot.exists()) {
+                throw new FirebaseFirestoreException(
+                        "The trip or ride request no longer exists.",
+                        FirebaseFirestoreException.Code.NOT_FOUND
+                );
+            }
+
+            String currentUid = currentUser.getUid();
+            String requesterUid = requestSnapshot.getString("requesterUid");
+            String storedTripId = requestSnapshot.getString("tripId");
+            String storedRequestId = requestSnapshot.getString("requestId");
+            String requestStatus = requestSnapshot.getString("status");
+            String tripStatus = tripSnapshot.getString("status");
+            String creatorUid = tripSnapshot.getString("creatorUid");
+
+            if (!currentUid.equals(requesterUid)) {
+                throw new FirebaseFirestoreException(
+                        "Only the requester can cancel this request.",
+                        FirebaseFirestoreException.Code.PERMISSION_DENIED
+                );
+            }
+            if (creatorUid == null
+                    || !request.getRequestId().equals(storedRequestId)
+                    || !request.getTripId().equals(storedTripId)
+                    || !creatorUid.equals(requestSnapshot.getString("creatorUid"))) {
+                throw new FirebaseFirestoreException(
+                        "The request does not match the selected trip.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                );
+            }
+            if (!"ACCEPTED".equalsIgnoreCase(requestStatus)) {
+                throw new FirebaseFirestoreException(
+                        "Only an accepted request can be cancelled.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                );
+            }
+
+            if ("OPEN".equalsIgnoreCase(tripStatus) || "CLOSED".equalsIgnoreCase(tripStatus)) {
+                Long seats = tripSnapshot.getLong("availableSeats");
+                if (seats == null) {
+                    throw new FirebaseFirestoreException(
+                            "Trip seat information is unavailable.",
+                            FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                    );
+                }
+                Map<String, Object> tripUpdates = new HashMap<>();
+                tripUpdates.put("availableSeats", seats + 1);
+                tripUpdates.put("lastCancelledRequestId", request.getRequestId());
+                transaction.update(tripRef, tripUpdates);
+            } else {
+                throw new FirebaseFirestoreException(
+                        "This trip is no longer active.",
+                        FirebaseFirestoreException.Code.FAILED_PRECONDITION
+                );
+            }
+
+            String requesterName = requestSnapshot.getString("requesterName");
+            String pickup = tripSnapshot.getString("pickup");
+            String destination = tripSnapshot.getString("destination");
+            Map<String, Object> notification = new HashMap<>();
+            notification.put("notificationId", notificationRef.getId());
+            notification.put("type", "REQUEST_CANCELLED");
+            notification.put("tripId", request.getTripId());
+            notification.put("requestId", request.getRequestId());
+            notification.put("senderUid", currentUid);
+            notification.put("senderName", requesterName != null ? requesterName : "A passenger");
+            notification.put("recipientUid", creatorUid);
+            notification.put("message", (requesterName != null ? requesterName : "A passenger")
+                    + " cancelled their accepted request for " + pickup + " → " + destination + ".");
+            notification.put("createdAt", FieldValue.serverTimestamp());
+
+            transaction.update(requestRef, "status", "CANCELLED");
+            transaction.set(notificationRef, notification);
+            return null;
+        }).addOnSuccessListener(unused -> callback.onSuccess())
                 .addOnFailureListener(callback::onFailure);
     }
 }

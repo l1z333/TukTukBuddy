@@ -11,10 +11,33 @@ service cloud.firestore {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
+    function isBeforeCancellationCutoff(tripData) {
+      return tripData.departureAt is timestamp
+             && request.time < tripData.departureAt - duration.value(5, 'm');
+    }
+
     // User Profile Rules
     match /users/{userId} {
       // Profile read and write restricted strictly to profile owner
       allow read, write: if isOwner(userId);
+
+      // A per-user marker removes a terminal trip from this user's history only.
+      match /hiddenTrips/{tripId} {
+        function isTerminalTrip() {
+          let tripPath = /databases/$(database)/documents/trips/$(tripId);
+          return exists(tripPath)
+                 && (get(tripPath).data.lifecycleStatus == "COMPLETED"
+                     || get(tripPath).data.lifecycleStatus == "CANCELLED");
+        }
+
+        allow read: if isOwner(userId);
+        allow create, update: if isOwner(userId)
+                              && isTerminalTrip()
+                              && request.resource.data.keys().hasOnly(['tripId', 'hiddenAt'])
+                              && request.resource.data.tripId == tripId
+                              && request.resource.data.hiddenAt == request.time;
+        allow delete: if isOwner(userId);
+      }
     }
 
     // Trip Rules
@@ -27,31 +50,85 @@ service cloud.firestore {
                     && request.resource.data.tripId == tripId
                     && request.resource.data.creatorUid == request.auth.uid
                     && request.resource.data.status == "OPEN"
-                    && request.resource.data.availableSeats > 0;
+                    && request.resource.data.availableSeats > 0
+                    && request.resource.data.departureAt is timestamp
+                    && request.resource.data.lifecycleStatus == "SCHEDULED"
+                    && request.resource.data.departureAt > request.time;
+
+      function isValidTripInProgress() {
+        return isAuthenticated()
+               && resource.data.creatorUid == request.auth.uid
+               && request.resource.data.lifecycleStatus == "IN_PROGRESS"
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lifecycleStatus'])
+               && resource.data.departureAt is timestamp
+               && request.time >= resource.data.departureAt
+               && (!resource.data.keys().hasAny(['lifecycleStatus'])
+                   || resource.data.lifecycleStatus == "SCHEDULED");
+      }
+
+      function isValidTripCompletion() {
+        return isAuthenticated()
+               && resource.data.creatorUid == request.auth.uid
+               && request.resource.data.lifecycleStatus == "COMPLETED"
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lifecycleStatus'])
+               && resource.data.departureAt is timestamp
+               && request.time >= resource.data.departureAt
+               && (!resource.data.keys().hasAny(['lifecycleStatus'])
+                   || resource.data.lifecycleStatus == "SCHEDULED"
+                   || resource.data.lifecycleStatus == "IN_PROGRESS");
+      }
+
+      function isValidCancellationSeatRestore(requestId) {
+        let requestPath = /databases/$(database)/documents/rideRequests/$(requestId);
+        let requestBefore = get(requestPath).data;
+        let requestAfter = getAfter(requestPath).data;
+        return isAuthenticated()
+               && (resource.data.status == "OPEN" || resource.data.status == "CLOSED")
+               && isBeforeCancellationCutoff(resource.data)
+               && requestBefore.requestId == requestId
+               && requestBefore.tripId == tripId
+               && requestBefore.creatorUid == resource.data.creatorUid
+               && requestBefore.requesterUid == request.auth.uid
+               && requestBefore.status == "ACCEPTED"
+               && requestAfter.status == "CANCELLED"
+               && requestAfter.diff(requestBefore).affectedKeys().hasOnly(['status'])
+               && request.resource.data.lastCancelledRequestId == requestId
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableSeats', 'lastCancelledRequestId'])
+               && request.resource.data.availableSeats == resource.data.availableSeats + 1;
+      }
 
       // Creator can update trip seats and status ONLY when accepting a matching pending ride request in the same transaction
-      allow update: if isAuthenticated()
-                    && resource.data.creatorUid == request.auth.uid
-                    && resource.data.status == "OPEN"
-                    && resource.data.availableSeats > 0
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableSeats', 'status', 'lastAcceptedRequestId'])
-                    && request.resource.data.availableSeats == resource.data.availableSeats - 1
-                    && (
-                      request.resource.data.availableSeats == 0
-                        ? request.resource.data.status == "CLOSED"
-                        : request.resource.data.status == "OPEN"
+      allow update: if (
+                      isAuthenticated()
+                      && resource.data.creatorUid == request.auth.uid
+                      && resource.data.status == "OPEN"
+                      && resource.data.availableSeats > 0
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableSeats', 'status', 'lastAcceptedRequestId'])
+                      && request.resource.data.availableSeats == resource.data.availableSeats - 1
+                      && (
+                        request.resource.data.availableSeats == 0
+                          ? request.resource.data.status == "CLOSED"
+                          : request.resource.data.status == "OPEN"
+                      )
+                      && request.resource.data.lastAcceptedRequestId != null
+                      && request.resource.data.lastAcceptedRequestId != ""
+                      && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
+                      && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "PENDING"
+                      && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
+                      && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid
+                      && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
+                      && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "ACCEPTED"
+                      && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
+                      && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid
                     )
-                    && request.resource.data.lastAcceptedRequestId != null
-                    && request.resource.data.lastAcceptedRequestId != ""
-                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
-                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "PENDING"
-                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
-                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid
-                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
-                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "ACCEPTED"
-                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
-                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid;
+                    || (request.resource.data.keys().hasAny(['lastCancelledRequestId'])
+                        && isValidCancellationSeatRestore(request.resource.data.lastCancelledRequestId))
+                    || isValidTripInProgress()
+                    || isValidTripCompletion();
 
+      // Whole-trip cancellation is performed by the authenticated callable
+      // cancelTrip function with the Admin SDK, which bypasses these rules.
+      // No client update branch grants lifecycleStatus=CANCELLED.
       // Explicitly deny trip deletion
       allow delete: if false;
     }
@@ -72,26 +149,91 @@ service cloud.firestore {
                     && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.status == "OPEN"
                     && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.availableSeats > 0;
 
-      // Only trip creator can accept or reject pending requests
-      allow update: if isAuthenticated()
-                    && resource.data.creatorUid == request.auth.uid
-                    && resource.data.status == "PENDING"
-                    && (request.resource.data.status == "ACCEPTED" || request.resource.data.status == "REJECTED")
-                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
-                    && (
-                      request.resource.data.status == "ACCEPTED"
-                        ? (
-                          getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.lastAcceptedRequestId == requestId
-                          && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1
-                          && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.status == (get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1 == 0 ? "CLOSED" : "OPEN")
-                        )
-                        : (
-                          getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data
-                        )
-                    );
+      function isValidRequesterCancellation() {
+        let tripPath = /databases/$(database)/documents/trips/$(resource.data.tripId);
+        let notificationPath = /databases/$(database)/documents/tripNotifications/$(requestId);
+        let tripBefore = get(tripPath).data;
+        let tripAfter = getAfter(tripPath).data;
+        let notificationAfter = getAfter(notificationPath).data;
+        return isAuthenticated()
+               && resource.data.requestId == requestId
+               && resource.data.requesterUid == request.auth.uid
+               && resource.data.status == "ACCEPTED"
+               && request.resource.data.status == "CANCELLED"
+               && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+               && tripBefore.tripId == resource.data.tripId
+               && tripBefore.creatorUid == resource.data.creatorUid
+               && isBeforeCancellationCutoff(tripBefore)
+               && notificationAfter.notificationId == requestId
+               && notificationAfter.type == "REQUEST_CANCELLED"
+               && notificationAfter.requestId == requestId
+               && notificationAfter.tripId == resource.data.tripId
+               && notificationAfter.senderUid == request.auth.uid
+               && notificationAfter.recipientUid == resource.data.creatorUid
+               && (
+                 (tripBefore.status == "OPEN" || tripBefore.status == "CLOSED")
+                   ? tripAfter.availableSeats == tripBefore.availableSeats + 1
+                     && tripAfter.status == tripBefore.status
+                     && tripAfter.lastCancelledRequestId == requestId
+                     && tripAfter.diff(tripBefore).affectedKeys().hasOnly(['availableSeats', 'lastCancelledRequestId'])
+                   : false
+               );
+      }
+
+      // Whole-trip cancellation (TRIP_CANCELLED) is server-owned; this client
+      // update branch intentionally does not permit requesters or creators to
+      // set that status. Only trip creators can accept/reject. The requester can cancel their
+      // accepted request only as an atomic, server-time-checked transaction.
+      allow update: if (
+                      isAuthenticated()
+                      && resource.data.creatorUid == request.auth.uid
+                      && resource.data.status == "PENDING"
+                      && (request.resource.data.status == "ACCEPTED" || request.resource.data.status == "REJECTED")
+                      && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                      && (
+                        request.resource.data.status == "ACCEPTED"
+                          ? (
+                            getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.lastAcceptedRequestId == requestId
+                            && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1
+                            && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.status == (get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1 == 0 ? "CLOSED" : "OPEN")
+                          )
+                          : (
+                            getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data
+                          )
+                      )
+                    )
+                    || isValidRequesterCancellation();
 
       // Explicitly deny request deletion
       allow delete: if false;
+    }
+
+    // Request-cancellation notices are written with their request/seat update.
+    // Whole-trip notices are written by the trusted callable. Only the recipient
+    // can read either type.
+    match /tripNotifications/{notificationId} {
+      allow read: if isAuthenticated() && resource.data.recipientUid == request.auth.uid;
+
+      allow create: if isAuthenticated()
+                    && notificationId == request.resource.data.notificationId
+                    && request.resource.data.keys().hasOnly([
+                      'notificationId', 'type', 'tripId', 'requestId', 'senderUid',
+                      'senderName', 'recipientUid', 'message', 'createdAt'
+                    ])
+                    && request.resource.data.notificationId == request.resource.data.requestId
+                    && request.resource.data.type == "REQUEST_CANCELLED"
+                    && request.resource.data.senderUid == request.auth.uid
+                    && request.resource.data.createdAt == request.time
+                    && exists(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId))
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId)).data.requesterUid == request.auth.uid
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId)).data.status == "ACCEPTED"
+                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId)).data.status == "CANCELLED"
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId)).data.tripId == request.resource.data.tripId
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.requestId)).data.creatorUid == request.resource.data.recipientUid
+                    && !exists(/databases/$(database)/documents/tripNotifications/$(notificationId))
+                    && isBeforeCancellationCutoff(get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data);
+
+      allow update, delete: if false;
     }
   }
 }

@@ -72,7 +72,9 @@ public class MyRequestsAdapter extends RecyclerView.Adapter<MyRequestsAdapter.My
             if ("ACCEPTED".equalsIgnoreCase(status)) {
                 tvMyRequestStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_accepted_container));
                 tvMyRequestStatus.setTextColor(ContextCompat.getColor(context, R.color.status_accepted));
-            } else if ("REJECTED".equalsIgnoreCase(status)) {
+            } else if ("REJECTED".equalsIgnoreCase(status)
+                    || "CANCELLED".equalsIgnoreCase(status)
+                    || "TRIP_CANCELLED".equalsIgnoreCase(status)) {
                 tvMyRequestStatus.setBackgroundColor(ContextCompat.getColor(context, R.color.status_rejected_container));
                 tvMyRequestStatus.setTextColor(ContextCompat.getColor(context, R.color.status_rejected));
             } else {

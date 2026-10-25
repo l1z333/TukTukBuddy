@@ -19,4 +19,6 @@
     <color name="status_accepted_container">#C8E6C9</color>
     <color name="status_rejected">#B71C1C</color>
     <color name="status_rejected_container">#FFCDD2</color>
+    <color name="status_cancelled">#616161</color>
+    <color name="status_cancelled_container">#E0E0E0</color>
 </resources>

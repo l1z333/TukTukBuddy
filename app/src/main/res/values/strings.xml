@@ -20,6 +20,46 @@
     <string name="loading_profile">Checking profile…</string>
     <string name="saving_profile">Saving your profile…</string>
     <string name="status_ready">Ready for Ride Sharing</string>
+    <string name="home_live_trips_title">Live Trips</string>
+    <string name="home_my_upcoming_trips_title">My Upcoming Trips</string>
+    <string name="home_past_trips_title">Past Trips</string>
+    <string name="home_trip_lifecycle_label">Ride lifecycle: %1$s</string>
+    <string name="home_trip_full_label">Full — no more passengers can join.</string>
+    <string name="home_trip_lifecycle_unknown">Lifecycle unavailable for this older trip.</string>
+    <string name="home_trip_mark_completed">Mark Trip Completed</string>
+    <string name="home_trip_cancel">Cancel Trip</string>
+    <string name="home_trip_cancelling">Cancelling…</string>
+    <string name="home_trip_cancel_title">Cancel this trip?</string>
+    <string name="home_trip_cancel_message">This cancels the entire ride, stops new requests, cancels pending and accepted requests, and notifies affected requesters. Seat counts and shared trip history will be preserved. This cannot be undone.</string>
+    <string name="home_trip_cancel_confirm">Cancel trip</string>
+    <string name="home_trip_cancel_details_unavailable">Trip details are unavailable; cancellation is disabled.</string>
+    <string name="home_trip_cancel_creator_only">Only the trip creator can cancel this ride.</string>
+    <string name="home_trip_cancel_time_unavailable">No verified departure time is available; this trip cannot be safely cancelled.</string>
+    <string name="home_trip_cancel_lifecycle_unavailable">The trip lifecycle cannot be verified; cancellation is disabled.</string>
+    <string name="home_trip_cancel_departed">This trip has departed or ended and cannot be cancelled as an upcoming ride.</string>
+    <plurals name="home_pending_request_count">
+        <item quantity="one">%1$d pending request</item>
+        <item quantity="other">%1$d pending requests</item>
+    </plurals>
+    <string name="home_trip_complete_title">Mark this trip completed?</string>
+    <string name="home_trip_complete_message">This will move the trip to Past Trips for its participants. Seat counts and ride requests will not change.</string>
+    <string name="home_trip_complete_confirm">Mark completed</string>
+    <string name="home_trip_hide_history">Remove from my history</string>
+    <string name="home_trip_hide_title">Remove trip from your history?</string>
+    <string name="home_trip_hide_message">This removes the trip only from your Past Trips list. Shared trip and request records stay unchanged.</string>
+    <string name="home_trip_hide_confirm">Remove</string>
+    <string name="home_trip_history_error">Past Trips could not be refreshed. Reconnecting…</string>
+    <string name="home_live_trip_listener_error">Live trip updates are unavailable. Reconnecting…</string>
+    <string name="home_trip_updates_title">Trip updates</string>
+    <string name="home_live_trip_creator_label">You are driving</string>
+    <string name="home_live_trip_requester_label">You are riding</string>
+    <string name="home_trip_status_label">Trip status: %1$s</string>
+    <string name="home_request_status_label">Request status: %1$s</string>
+    <string name="home_accepted_passengers_label">Accepted passengers:</string>
+    <string name="home_cancel_request">Cancel My Request</string>
+    <string name="home_cancel_request_title">Cancel ride request?</string>
+    <string name="home_cancel_request_message">Your accepted request will be cancelled. If the trip is still open, its seat count will be restored.</string>
+    <string name="home_cancel_request_confirm">Cancel request</string>
 
     <!-- Home Actions -->
     <string name="btn_post_trip">🛺 Post a New Trip</string>
@@ -36,7 +76,7 @@
     <string name="hint_destination">e.g., Main Gate / Metro Station</string>
     <string name="label_date">Travel Date</string>
     <string name="hint_date">YYYY-MM-DD</string>
-    <string name="label_time">Travel Time</string>
+    <string name="label_time">Travel Time (IST)</string>
     <string name="hint_time">HH:MM AM/PM</string>
     <string name="label_seats">Available Seats</string>
     <string name="hint_seats">Number of open seats (1-10)</string>
@@ -59,7 +99,7 @@
     <string name="error_trips_title">Failed to load trips</string>
     <string name="btn_retry">Retry</string>
     <string name="trip_route_format">%1$s  ➔  %2$s</string>
-    <string name="trip_date_time_format">📅 %1$s   ⏰ %2$s</string>
+    <string name="trip_date_time_format">📅 %1$s   ⏰ %2$s IST</string>
     <string name="trip_seats_format">🛺 %1$d seats available</string>
     <string name="trip_creator_format">Posted by %1$s</string>
     <string name="trip_status_open">OPEN</string>

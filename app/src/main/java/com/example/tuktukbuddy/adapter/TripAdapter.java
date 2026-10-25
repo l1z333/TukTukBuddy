@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.tuktukbuddy.R;
 import com.example.tuktukbuddy.model.Trip;
+import com.example.tuktukbuddy.util.TripTimeUtils;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -81,7 +82,11 @@ public class TripAdapter extends RecyclerView.Adapter<TripAdapter.TripViewHolder
             String route = itemView.getContext().getString(R.string.trip_route_format, trip.getPickup(), trip.getDestination());
             tvTripRoute.setText(route);
 
-            String dateTime = itemView.getContext().getString(R.string.trip_date_time_format, trip.getDate(), trip.getTime());
+            String dateTime = itemView.getContext().getString(
+                    R.string.trip_date_time_format,
+                    TripTimeUtils.getDisplayDate(trip),
+                    TripTimeUtils.getDisplayTime(trip)
+            );
             tvTripDateTime.setText(dateTime);
 
             String seats = itemView.getContext().getString(R.string.trip_seats_format, trip.getAvailableSeats());

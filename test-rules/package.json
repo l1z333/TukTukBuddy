@@ -1,0 +1,13 @@
+{
+  "name": "tuktukbuddy-rules-tests",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "test": "mocha firestore-rules.test.js --timeout 10000",
+    "test:functions": "mocha ../functions/test/*.test.js --timeout 10000"
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "mocha": "^10.4.0"
+  }
+}

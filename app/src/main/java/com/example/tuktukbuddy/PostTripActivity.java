@@ -17,12 +17,14 @@ import com.example.tuktukbuddy.model.User;
 import com.example.tuktukbuddy.repository.TripRepository;
 import com.example.tuktukbuddy.repository.UserRepository;
 import com.example.tuktukbuddy.util.UserPreferenceManager;
+import com.example.tuktukbuddy.util.TripTimeUtils;
 import com.google.android.material.appbar.MaterialToolbar;
 import com.google.android.material.textfield.TextInputEditText;
 import com.google.android.material.textfield.TextInputLayout;
 import com.google.firebase.auth.FirebaseUser;
 
 import java.util.Calendar;
+import java.util.Date;
 import java.util.Locale;
 
 public class PostTripActivity extends AppCompatActivity {
@@ -177,6 +179,17 @@ public class PostTripActivity extends AppCompatActivity {
             return;
         }
 
+        Date departureAt = TripTimeUtils.parseDepartureAt(date, time);
+        if (departureAt == null) {
+            tilDate.setError("Please enter a valid date and time.");
+            tilTime.setError("Please enter a valid date and time.");
+            return;
+        }
+        if (departureAt.getTime() <= System.currentTimeMillis()) {
+            tilTime.setError("Departure time must be in the future.");
+            return;
+        }
+
         FirebaseUser firebaseUser = userRepository.getCurrentFirebaseUser();
         if (firebaseUser == null) {
             Toast.makeText(this, "Authentication error. Please re-open app.", Toast.LENGTH_SHORT).show();
@@ -196,13 +209,14 @@ public class PostTripActivity extends AppCompatActivity {
                 creatorName,
                 pickup,
                 destination,
-                date,
-                time,
+                TripTimeUtils.formatDate(departureAt),
+                TripTimeUtils.formatTime(departureAt),
                 parsedSeats,
                 notes,
                 "OPEN",
                 System.currentTimeMillis()
         );
+        trip.setDepartureAt(departureAt);
 
         tripRepository.createTrip(trip, new TripRepository.ActionCallback() {
             @Override
