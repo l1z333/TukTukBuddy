@@ -110,7 +110,6 @@
                             android:id="@+id/etStudentName"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:hint="@string/hint_name"
                             android:inputType="textPersonName|textCapWords"
                             android:maxLines="1" />
                     </com.google.android.material.textfield.TextInputLayout>
@@ -128,7 +127,6 @@
                             android:id="@+id/etRollNumber"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:hint="@string/hint_roll_no"
                             android:inputType="textCapCharacters"
                             android:maxLines="1" />
                     </com.google.android.material.textfield.TextInputLayout>

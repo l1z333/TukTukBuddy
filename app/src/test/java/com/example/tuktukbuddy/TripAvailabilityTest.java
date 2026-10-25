@@ -3,6 +3,7 @@ package com.example.tuktukbuddy;
 import com.example.tuktukbuddy.model.Trip;
 import com.example.tuktukbuddy.model.RideRequest;
 import com.example.tuktukbuddy.util.LiveTripPolicy;
+import com.example.tuktukbuddy.util.NotificationEventPolicy;
 import com.example.tuktukbuddy.util.TripLifecycleUtils;
 import com.example.tuktukbuddy.util.TripHistoryPolicy;
 import com.example.tuktukbuddy.util.TripTimeUtils;
@@ -22,6 +23,40 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 
 public class TripAvailabilityTest {
+
+    @Test
+    public void localNotificationPolicySkipsInitialAndNonEventSnapshots() {
+        assertFalse(NotificationEventPolicy.isNewCreatorRequest(true, true, "PENDING"));
+        assertTrue(NotificationEventPolicy.isNewCreatorRequest(false, true, "PENDING"));
+        assertFalse(NotificationEventPolicy.isNewCreatorRequest(false, false, "PENDING"));
+        assertFalse(NotificationEventPolicy.isNewCreatorRequest(false, true, "ACCEPTED"));
+
+        assertFalse(NotificationEventPolicy.isRequesterDecision(true, "PENDING", "ACCEPTED"));
+        assertTrue(NotificationEventPolicy.isRequesterDecision(false, "PENDING", "ACCEPTED"));
+        assertTrue(NotificationEventPolicy.isRequesterDecision(false, "PENDING", "REJECTED"));
+        assertFalse(NotificationEventPolicy.isRequesterDecision(false, "ACCEPTED", "REJECTED"));
+
+        assertFalse(NotificationEventPolicy.isNewRequesterCancellationNotice(
+                true, true, "REQUEST_CANCELLED"));
+        assertTrue(NotificationEventPolicy.isNewRequesterCancellationNotice(
+                false, true, "REQUEST_CANCELLED"));
+        assertFalse(NotificationEventPolicy.isNewRequesterCancellationNotice(
+                false, true, "TRIP_CANCELLED"));
+    }
+
+    @Test
+    public void localTripCancellationNotificationRequiresObservedNonTerminalTransition() {
+        assertFalse(NotificationEventPolicy.isTripCancellationTransition(
+                true, "SCHEDULED", "CANCELLED"));
+        assertTrue(NotificationEventPolicy.isTripCancellationTransition(
+                false, "SCHEDULED", "CANCELLED"));
+        assertFalse(NotificationEventPolicy.isTripCancellationTransition(
+                false, "CANCELLED", "CANCELLED"));
+        assertFalse(NotificationEventPolicy.isTripCancellationTransition(
+                false, "COMPLETED", "CANCELLED"));
+        assertTrue("A previously observed legacy trip without lifecycleStatus can be cancelled",
+                NotificationEventPolicy.isTripCancellationTransition(false, null, "CANCELLED"));
+    }
 
     @Test
     public void onlyOpenTripsWithSeatsAreAvailableForBrowsing() {

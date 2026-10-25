@@ -1,6 +1,9 @@
 package com.example.tuktukbuddy;
 
+import android.Manifest;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -11,6 +14,8 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.example.tuktukbuddy.model.RideRequest;
@@ -20,6 +25,8 @@ import com.example.tuktukbuddy.repository.RideRequestRepository;
 import com.example.tuktukbuddy.repository.TripRepository;
 import com.example.tuktukbuddy.repository.UserRepository;
 import com.example.tuktukbuddy.util.LiveTripPolicy;
+import com.example.tuktukbuddy.util.LocalNotificationHelper;
+import com.example.tuktukbuddy.util.NotificationEventPolicy;
 import com.example.tuktukbuddy.util.TripLifecycleUtils;
 import com.example.tuktukbuddy.util.TripTimeUtils;
 import com.example.tuktukbuddy.util.UserPreferenceManager;
@@ -28,9 +35,11 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder;
 import com.google.android.material.card.MaterialCardView;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentSnapshot;
+import com.google.firebase.firestore.DocumentChange;
 import com.google.firebase.firestore.FirebaseFirestore;
 import com.google.firebase.firestore.FirebaseFirestoreException;
 import com.google.firebase.firestore.ListenerRegistration;
+import com.google.firebase.firestore.MetadataChanges;
 import com.google.firebase.firestore.QueryDocumentSnapshot;
 import com.google.firebase.functions.FirebaseFunctionsException;
 
@@ -71,6 +80,8 @@ public class HomeActivity extends AppCompatActivity {
     private final Map<String, Map<String, RideRequest>> creatorAcceptedRequests = new HashMap<>();
     private final Map<String, Map<String, RideRequest>> creatorPendingRequests = new HashMap<>();
     private final Map<String, RideRequest> requesterAcceptedRequests = new LinkedHashMap<>();
+    private final Map<String, RideRequest> requesterPendingRequests = new LinkedHashMap<>();
+    private final Map<String, String> requesterObservedStatuses = new HashMap<>();
     private final Map<String, Trip> requesterTrips = new HashMap<>();
     private final Map<String, ListenerRegistration> requesterTripListeners = new HashMap<>();
     private final Map<String, ListenerRegistration> creatorAcceptedTripListeners = new HashMap<>();
@@ -80,9 +91,12 @@ public class HomeActivity extends AppCompatActivity {
     private final Set<String> lifecycleTransitionInProgress = new LinkedHashSet<>();
     private final Set<String> liveListenerErrors = new LinkedHashSet<>();
     private final Set<String> requesterTripErrors = new LinkedHashSet<>();
+    private final Set<String> requesterTripServerSnapshotsInitialized = new LinkedHashSet<>();
+    private final Map<String, String> requesterServerTripLifecycles = new HashMap<>();
     private final Map<String, Integer> listenerAttempts = new HashMap<>();
     private final Map<String, Integer> listenerRetryCounts = new HashMap<>();
     private final Map<String, Runnable> listenerRetries = new HashMap<>();
+    private final Map<String, PendingLocalNotification> pendingLocalNotifications = new LinkedHashMap<>();
     private List<DocumentSnapshot> tripNotifications = new ArrayList<>();
 
     private ListenerRegistration creatorTripsListener;
@@ -93,7 +107,12 @@ public class HomeActivity extends AppCompatActivity {
     private boolean activityStarted;
     private boolean creatorRequestsLoaded;
     private boolean creatorTripsLoaded;
+    private boolean creatorRequestsSnapshotInitialized;
+    private boolean requesterRequestsSnapshotInitialized;
+    private boolean notificationsSnapshotInitialized;
+    private boolean notificationPermissionRequestInProgress;
     private int liveListenerGeneration;
+    private ActivityResultLauncher<String> notificationPermissionLauncher;
 
     private final Runnable liveTripRefresh = new Runnable() {
         @Override
@@ -107,6 +126,22 @@ public class HomeActivity extends AppCompatActivity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_home);
+
+        LocalNotificationHelper.createChannel(this);
+        notificationPermissionLauncher = registerForActivityResult(
+                new ActivityResultContracts.RequestPermission(), granted -> {
+                    notificationPermissionRequestInProgress = false;
+                    if (granted) {
+                        for (PendingLocalNotification pending : pendingLocalNotifications.values()) {
+                            LocalNotificationHelper.post(this, pending.eventId, pending.title,
+                                    pending.message, pending.destination);
+                        }
+                    }
+                    pendingLocalNotifications.clear();
+                    if (!granted) {
+                        Log.i(TAG, "Notification permission not granted; in-app updates remain available.");
+                    }
+                });
 
         preferenceManager = new UserPreferenceManager(this);
         userRepository = new UserRepository();
@@ -389,10 +424,11 @@ public class HomeActivity extends AppCompatActivity {
         if (!isCurrentLiveListener(generation) || creatorRequestsListener != null) return;
         final String key = "creatorRequests";
         final int attempt = nextListenerAttempt(key);
+        creatorRequestsSnapshotInitialized = false;
         creatorRequestsListener = firestore.collection("rideRequests")
                 .whereEqualTo("creatorUid", uid)
                 .whereIn("status", Arrays.asList("PENDING", "ACCEPTED"))
-                .addSnapshotListener((snapshots, error) -> {
+                .addSnapshotListener(MetadataChanges.INCLUDE, (snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
                         invalidateListenerAttempt(key, attempt);
@@ -401,11 +437,30 @@ public class HomeActivity extends AppCompatActivity {
                         creatorAcceptedRequests.clear();
                         creatorPendingRequests.clear();
                         creatorRequestsLoaded = false;
+                        creatorRequestsSnapshotInitialized = false;
                         reconcileCreatorAcceptedTripListeners(firestore);
                         renderLiveTrips();
                         scheduleListenerRetry(key, () -> attachCreatorRequestsListener(firestore, uid, generation));
                         return;
                     }
+                    boolean initialSnapshot = !creatorRequestsSnapshotInitialized;
+                    boolean fromCache = snapshots.getMetadata().isFromCache();
+                    if (!initialSnapshot && !fromCache) {
+                        for (DocumentChange change : snapshots.getDocumentChanges()) {
+                            if (change.getType() != DocumentChange.Type.ADDED) continue;
+                            RideRequest addedRequest = toRideRequest(change.getDocument());
+                            if (NotificationEventPolicy.isNewCreatorRequest(
+                                    initialSnapshot, true, addedRequest.getStatus())) {
+                                String route = notificationRoute(addedRequest.getTripRoute());
+                                postLocalNotification(
+                                        "new-request:" + change.getDocument().getId(),
+                                        getString(R.string.notification_new_request_title),
+                                        getString(R.string.notification_new_request_message, route),
+                                        ManageRequestsActivity.class);
+                            }
+                        }
+                    }
+                    if (!fromCache) creatorRequestsSnapshotInitialized = true;
                     creatorAcceptedRequests.clear();
                     creatorPendingRequests.clear();
                     for (QueryDocumentSnapshot document : snapshots) {
@@ -434,16 +489,20 @@ public class HomeActivity extends AppCompatActivity {
         if (!isCurrentLiveListener(generation) || requesterRequestsListener != null) return;
         final String key = "requesterRequests";
         final int attempt = nextListenerAttempt(key);
+        requesterRequestsSnapshotInitialized = false;
+        requesterObservedStatuses.clear();
         requesterRequestsListener = firestore.collection("rideRequests")
                 .whereEqualTo("requesterUid", uid)
-                .whereEqualTo("status", "ACCEPTED")
-                .addSnapshotListener((snapshots, error) -> {
+                .addSnapshotListener(MetadataChanges.INCLUDE, (snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
                         invalidateListenerAttempt(key, attempt);
                         failLiveListener(key, requesterRequestsListener, error, null, null);
                         requesterRequestsListener = null;
                         requesterAcceptedRequests.clear();
+                        requesterPendingRequests.clear();
+                        requesterObservedStatuses.clear();
+                        requesterRequestsSnapshotInitialized = false;
                         clearRequesterTripListeners();
                         requesterTrips.clear();
                         requesterTripErrors.clear();
@@ -451,12 +510,52 @@ public class HomeActivity extends AppCompatActivity {
                         scheduleListenerRetry(key, () -> attachRequesterRequestsListener(firestore, uid, generation));
                         return;
                     }
+                    boolean initialSnapshot = !requesterRequestsSnapshotInitialized;
+                    boolean fromCache = snapshots.getMetadata().isFromCache();
+                    if (initialSnapshot) {
+                        requesterObservedStatuses.clear();
+                        for (QueryDocumentSnapshot document : snapshots) {
+                            requesterObservedStatuses.put(document.getId(), document.getString("status"));
+                        }
+                        if (!fromCache) requesterRequestsSnapshotInitialized = true;
+                    } else if (!fromCache) {
+                        for (DocumentChange change : snapshots.getDocumentChanges()) {
+                            QueryDocumentSnapshot document = change.getDocument();
+                            String requestId = document.getId();
+                            String previousStatus = requesterObservedStatuses.get(requestId);
+                            String currentStatus = document.getString("status");
+                            if (change.getType() == DocumentChange.Type.MODIFIED
+                                    && NotificationEventPolicy.isRequesterDecision(
+                                    initialSnapshot, previousStatus, currentStatus)) {
+                                RideRequest changedRequest = toRideRequest(document);
+                                boolean accepted = "ACCEPTED".equalsIgnoreCase(currentStatus);
+                                postLocalNotification(
+                                        (accepted ? "request-accepted:" : "request-rejected:") + requestId,
+                                        getString(accepted
+                                                ? R.string.notification_request_accepted_title
+                                                : R.string.notification_request_rejected_title),
+                                        getString(accepted
+                                                ? R.string.notification_request_accepted_message
+                                                : R.string.notification_request_rejected_message,
+                                                notificationRoute(changedRequest.getTripRoute())),
+                                        MyRequestsActivity.class);
+                            }
+                            if (change.getType() == DocumentChange.Type.REMOVED) {
+                                requesterObservedStatuses.remove(requestId);
+                            } else {
+                                requesterObservedStatuses.put(requestId, currentStatus);
+                            }
+                        }
+                    }
                     requesterAcceptedRequests.clear();
+                    requesterPendingRequests.clear();
                     for (QueryDocumentSnapshot document : snapshots) {
                         RideRequest request = toRideRequest(document);
                         if (LiveTripPolicy.isAcceptedRequest(request)) {
                             LiveTripPolicy.addRequestByDocumentId(
                                     requesterAcceptedRequests, document.getId(), request);
+                        } else if ("PENDING".equalsIgnoreCase(request.getStatus())) {
+                            requesterPendingRequests.put(document.getId(), request);
                         }
                     }
                     reconcileRequesterTripListeners(firestore);
@@ -469,9 +568,10 @@ public class HomeActivity extends AppCompatActivity {
         if (!isCurrentLiveListener(generation) || notificationsListener != null) return;
         final String key = "notifications";
         final int attempt = nextListenerAttempt(key);
+        notificationsSnapshotInitialized = false;
         notificationsListener = firestore.collection("tripNotifications")
                 .whereEqualTo("recipientUid", uid)
-                .addSnapshotListener((snapshots, error) -> {
+                .addSnapshotListener(MetadataChanges.INCLUDE, (snapshots, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)) return;
                     if (error != null || snapshots == null) {
                         invalidateListenerAttempt(key, attempt);
@@ -483,10 +583,30 @@ public class HomeActivity extends AppCompatActivity {
                         failLiveListener(key, notificationsListener, error, null, null);
                         notificationsListener = null;
                         tripNotifications.clear();
+                        notificationsSnapshotInitialized = false;
                         renderLiveTrips();
                         scheduleListenerRetry(key, () -> attachNotificationsListener(firestore, uid, generation));
                         return;
                     }
+                    boolean initialSnapshot = !notificationsSnapshotInitialized;
+                    boolean fromCache = snapshots.getMetadata().isFromCache();
+                    if (!initialSnapshot && !fromCache) {
+                        for (DocumentChange change : snapshots.getDocumentChanges()) {
+                            if (change.getType() != DocumentChange.Type.ADDED
+                                    || !NotificationEventPolicy.isNewRequesterCancellationNotice(
+                                    initialSnapshot, true, change.getDocument().getString("type"))) continue;
+                            String message = change.getDocument().getString("message");
+                            if (message == null || message.trim().isEmpty()) {
+                                message = getString(R.string.notification_request_cancelled_fallback);
+                            }
+                            postLocalNotification(
+                                    "request-cancelled:" + change.getDocument().getId(),
+                                    getString(R.string.notification_request_cancelled_title),
+                                    message,
+                                    ManageRequestsActivity.class);
+                        }
+                    }
+                    if (!fromCache) notificationsSnapshotInitialized = true;
                     tripNotifications = new ArrayList<>(snapshots.getDocuments());
                     recoverLiveListener(key);
                     renderLiveTrips();
@@ -521,6 +641,7 @@ public class HomeActivity extends AppCompatActivity {
         creatorPendingRequests.clear();
         creatorRequestsLoaded = false;
         requesterAcceptedRequests.clear();
+        requesterPendingRequests.clear();
         requesterTrips.clear();
         tripNotifications.clear();
         cancellationInProgress.clear();
@@ -556,6 +677,8 @@ public class HomeActivity extends AppCompatActivity {
             liveListenerErrors.remove(key);
         }
         requesterTripListeners.clear();
+        requesterTripServerSnapshotsInitialized.clear();
+        requesterServerTripLifecycles.clear();
         requesterTripErrors.clear();
     }
 
@@ -667,7 +790,9 @@ public class HomeActivity extends AppCompatActivity {
 
     private void reconcileRequesterTripListeners(FirebaseFirestore firestore) {
         Set<String> requiredTripIds = new LinkedHashSet<>();
-        for (RideRequest request : requesterAcceptedRequests.values()) {
+        List<RideRequest> relevantRequests = new ArrayList<>(requesterAcceptedRequests.values());
+        relevantRequests.addAll(requesterPendingRequests.values());
+        for (RideRequest request : relevantRequests) {
             if (request.getTripId() != null && !request.getTripId().isEmpty()) {
                 requiredTripIds.add(request.getTripId());
             }
@@ -680,6 +805,8 @@ public class HomeActivity extends AppCompatActivity {
         for (String tripId : obsoleteIds) {
             requesterTripListeners.remove(tripId).remove();
             requesterTrips.remove(tripId);
+            requesterTripServerSnapshotsInitialized.remove(tripId);
+            requesterServerTripLifecycles.remove(tripId);
             requesterTripErrors.remove(tripId);
             String retryKey = "requesterTrip:" + tripId;
             Runnable retry = listenerRetries.remove(retryKey);
@@ -700,9 +827,11 @@ public class HomeActivity extends AppCompatActivity {
         if (!isCurrentLiveListener(generation)
                 || requesterTripListeners.containsKey(tripId)
                 || !isRequesterTripRequired(tripId)) return;
+        requesterTripServerSnapshotsInitialized.remove(tripId);
+        requesterServerTripLifecycles.remove(tripId);
         final int attempt = nextListenerAttempt(key);
         ListenerRegistration listener = firestore.collection("trips").document(tripId)
-                .addSnapshotListener((snapshot, error) -> {
+                .addSnapshotListener(MetadataChanges.INCLUDE, (snapshot, error) -> {
                     if (!isCurrentListenerAttempt(generation, key, attempt)
                             || !requesterTripListeners.containsKey(tripId)) return;
                     if (error != null || snapshot == null) {
@@ -711,12 +840,15 @@ public class HomeActivity extends AppCompatActivity {
                                 tripId, firstRequesterIdForTrip(tripId));
                         requesterTripListeners.remove(tripId);
                         requesterTrips.remove(tripId);
+                        requesterTripServerSnapshotsInitialized.remove(tripId);
+                        requesterServerTripLifecycles.remove(tripId);
                         requesterTripErrors.add(tripId);
                         renderLiveTrips();
                         scheduleListenerRetry(key, () -> attachRequesterTripListener(
                                 firestore, tripId, generation));
                         return;
                     }
+                    boolean fromCache = snapshot.getMetadata().isFromCache();
                     if (!snapshot.exists()) {
                         requesterTrips.remove(tripId);
                     } else {
@@ -727,6 +859,30 @@ public class HomeActivity extends AppCompatActivity {
                             }
                             trip.setTripId(snapshot.getId());
                             requesterTrips.put(tripId, trip);
+                        }
+                    }
+                    if (!fromCache) {
+                        if (!snapshot.exists()) {
+                            requesterTripServerSnapshotsInitialized.remove(tripId);
+                            requesterServerTripLifecycles.remove(tripId);
+                        } else {
+                            Trip serverTrip = snapshot.toObject(Trip.class);
+                            String currentLifecycle = serverTrip != null
+                                    ? serverTrip.getLifecycleStatus() : null;
+                            boolean initialSnapshot = !requesterTripServerSnapshotsInitialized
+                                    .contains(tripId);
+                            String previousLifecycle = requesterServerTripLifecycles.get(tripId);
+                            if (NotificationEventPolicy.isTripCancellationTransition(
+                                    initialSnapshot, previousLifecycle, currentLifecycle)) {
+                                String route = notificationRoute(serverTrip.getPickup(), serverTrip.getDestination());
+                                postLocalNotification(
+                                        "trip-cancelled:" + tripId,
+                                        getString(R.string.notification_trip_cancelled_title),
+                                        getString(R.string.notification_trip_cancelled_message, route),
+                                        TripHistoryActivity.class);
+                            }
+                            requesterTripServerSnapshotsInitialized.add(tripId);
+                            requesterServerTripLifecycles.put(tripId, currentLifecycle);
                         }
                     }
                     recoverLiveListener(key);
@@ -740,11 +896,17 @@ public class HomeActivity extends AppCompatActivity {
         for (RideRequest request : requesterAcceptedRequests.values()) {
             if (tripId.equals(request.getTripId())) return true;
         }
+        for (RideRequest request : requesterPendingRequests.values()) {
+            if (tripId.equals(request.getTripId())) return true;
+        }
         return false;
     }
 
     private String firstRequesterIdForTrip(String tripId) {
         for (RideRequest request : requesterAcceptedRequests.values()) {
+            if (tripId.equals(request.getTripId())) return request.getRequestId();
+        }
+        for (RideRequest request : requesterPendingRequests.values()) {
             if (tripId.equals(request.getTripId())) return request.getRequestId();
         }
         return null;
@@ -981,6 +1143,64 @@ public class HomeActivity extends AppCompatActivity {
     private long notificationTime(DocumentSnapshot snapshot) {
         com.google.firebase.Timestamp timestamp = snapshot.getTimestamp("createdAt");
         return timestamp != null ? timestamp.toDate().getTime() : 0L;
+    }
+
+    private String notificationRoute(String route) {
+        return route == null || route.trim().isEmpty()
+                ? getString(R.string.notification_route_unavailable) : route.trim();
+    }
+
+    private String notificationRoute(String pickup, String destination) {
+        if (pickup == null || pickup.trim().isEmpty()
+                || destination == null || destination.trim().isEmpty()) {
+            return getString(R.string.notification_route_unavailable);
+        }
+        return pickup.trim() + " → " + destination.trim();
+    }
+
+    private void postLocalNotification(String eventId,
+                                       String title,
+                                       String message,
+                                       Class<? extends android.app.Activity> destination) {
+        if (LocalNotificationHelper.hasPermission(this)) {
+            LocalNotificationHelper.post(this, eventId, title, message, destination);
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU
+                || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) return;
+
+        if (notificationPermissionRequestInProgress) {
+            pendingLocalNotifications.putIfAbsent(eventId,
+                    new PendingLocalNotification(eventId, title, message, destination));
+            return;
+        }
+
+        android.content.SharedPreferences preferences = getSharedPreferences(
+                "notification_permission", MODE_PRIVATE);
+        if (preferences.getBoolean("requested", false)) return;
+
+        pendingLocalNotifications.putIfAbsent(eventId,
+                new PendingLocalNotification(eventId, title, message, destination));
+        preferences.edit().putBoolean("requested", true).apply();
+        notificationPermissionRequestInProgress = true;
+        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS);
+    }
+
+    private static final class PendingLocalNotification {
+        private final String eventId;
+        private final String title;
+        private final String message;
+        private final Class<? extends android.app.Activity> destination;
+
+        private PendingLocalNotification(String eventId, String title, String message,
+                                         Class<? extends android.app.Activity> destination) {
+            this.eventId = eventId;
+            this.title = title;
+            this.message = message;
+            this.destination = destination;
+        }
     }
 
     private TextView createLiveText(String text, int textSize, boolean bold) {
