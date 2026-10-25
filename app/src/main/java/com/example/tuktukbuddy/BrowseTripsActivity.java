@@ -71,7 +71,6 @@ public class BrowseTripsActivity extends AppCompatActivity {
 
         // Build filter adapter: "All locations" + campus list
         String[] campusLocations = getResources().getStringArray(R.array.campus_locations);
-        // campusLocations[0] is "Select location…" — reuse all items but rename index 0
         String[] filterItems = new String[campusLocations.length];
         filterItems[0] = getString(R.string.filter_all_locations);
         System.arraycopy(campusLocations, 1, filterItems, 1, campusLocations.length - 1);
@@ -108,7 +107,11 @@ public class BrowseTripsActivity extends AppCompatActivity {
 
         btnRetry.setOnClickListener(v -> loadTrips());
         btnRefreshEmpty.setOnClickListener(v -> loadTrips());
+    }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
         loadTrips();
     }
 

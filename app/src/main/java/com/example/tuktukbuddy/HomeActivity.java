@@ -102,7 +102,8 @@ public class HomeActivity extends AppCompatActivity {
 
     private void resetProfileForOnboarding() {
         preferenceManager.clearProfileForReset();
-        Toast.makeText(this, "Profile cleared.", Toast.LENGTH_SHORT).show();
+        userRepository.signOut();
+        Toast.makeText(this, "Profile reset and signed out.", Toast.LENGTH_SHORT).show();
         redirectToOnboarding();
     }
 

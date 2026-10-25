@@ -13,25 +13,47 @@ service cloud.firestore {
 
     // User Profile Rules
     match /users/{userId} {
-      // Any authenticated student can read profiles
-      allow read: if isAuthenticated();
-      // Users can only write/update their own profile
-      allow write: if isOwner(userId);
+      // Profile read and write restricted strictly to profile owner
+      allow read, write: if isOwner(userId);
     }
 
     // Trip Rules
     match /trips/{tripId} {
-      // Any authenticated user can read open trips
+      // Authenticated users can read open/closed trips
       allow read: if isAuthenticated();
 
-      // Authenticated users can create trips if creatorUid matches their auth.uid
+      // Authenticated users can create trips if creatorUid matches auth.uid
       allow create: if isAuthenticated()
+                    && request.resource.data.tripId == tripId
                     && request.resource.data.creatorUid == request.auth.uid
-                    && request.resource.data.status == "OPEN";
+                    && request.resource.data.status == "OPEN"
+                    && request.resource.data.availableSeats > 0;
 
-      // Creator can update status and availableSeats, or delete trip
-      allow update, delete: if isAuthenticated()
-                            && resource.data.creatorUid == request.auth.uid;
+      // Creator can update trip seats and status ONLY when accepting a matching pending ride request in the same transaction
+      allow update: if isAuthenticated()
+                    && resource.data.creatorUid == request.auth.uid
+                    && resource.data.status == "OPEN"
+                    && resource.data.availableSeats > 0
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['availableSeats', 'status', 'lastAcceptedRequestId'])
+                    && request.resource.data.availableSeats == resource.data.availableSeats - 1
+                    && (
+                      request.resource.data.availableSeats == 0
+                        ? request.resource.data.status == "CLOSED"
+                        : request.resource.data.status == "OPEN"
+                    )
+                    && request.resource.data.lastAcceptedRequestId != null
+                    && request.resource.data.lastAcceptedRequestId != ""
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "PENDING"
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
+                    && get(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid
+                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.requestId == request.resource.data.lastAcceptedRequestId
+                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.status == "ACCEPTED"
+                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.tripId == tripId
+                    && getAfter(/databases/$(database)/documents/rideRequests/$(request.resource.data.lastAcceptedRequestId)).data.creatorUid == request.auth.uid;
+
+      // Explicitly deny trip deletion
+      allow delete: if false;
     }
 
     // Ride Request Rules
@@ -40,16 +62,36 @@ service cloud.firestore {
       allow read: if isAuthenticated()
                   && (resource.data.requesterUid == request.auth.uid || resource.data.creatorUid == request.auth.uid);
 
-      // Students can create requests for open trips if requesterUid matches auth.uid and they are not the creator
+      // Requesters can create PENDING requests for OPEN trips with seats
       allow create: if isAuthenticated()
+                    && request.resource.data.requestId == requestId
                     && request.resource.data.requesterUid == request.auth.uid
                     && request.resource.data.requesterUid != request.resource.data.creatorUid
-                    && request.resource.data.status == "PENDING";
+                    && request.resource.data.status == "PENDING"
+                    && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.creatorUid == request.resource.data.creatorUid
+                    && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.status == "OPEN"
+                    && get(/databases/$(database)/documents/trips/$(request.resource.data.tripId)).data.availableSeats > 0;
 
-      // Only the trip creator can update request status (Accept / Reject)
+      // Only trip creator can accept or reject pending requests
       allow update: if isAuthenticated()
                     && resource.data.creatorUid == request.auth.uid
-                    && (request.resource.data.status == "ACCEPTED" || request.resource.data.status == "REJECTED");
+                    && resource.data.status == "PENDING"
+                    && (request.resource.data.status == "ACCEPTED" || request.resource.data.status == "REJECTED")
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status'])
+                    && (
+                      request.resource.data.status == "ACCEPTED"
+                        ? (
+                          getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.lastAcceptedRequestId == requestId
+                          && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1
+                          && getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.status == (get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data.availableSeats - 1 == 0 ? "CLOSED" : "OPEN")
+                        )
+                        : (
+                          getAfter(/databases/$(database)/documents/trips/$(resource.data.tripId)).data == get(/databases/$(database)/documents/trips/$(resource.data.tripId)).data
+                        )
+                    );
+
+      // Explicitly deny request deletion
+      allow delete: if false;
     }
   }
 }

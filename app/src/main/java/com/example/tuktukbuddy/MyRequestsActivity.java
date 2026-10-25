@@ -57,7 +57,11 @@ public class MyRequestsActivity extends AppCompatActivity {
 
         btnRetry.setOnClickListener(v -> loadMyRequests());
         btnRefreshEmpty.setOnClickListener(v -> loadMyRequests());
+    }
 
+    @Override
+    protected void onResume() {
+        super.onResume();
         loadMyRequests();
     }
 
